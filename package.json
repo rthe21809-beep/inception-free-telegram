@@ -1,0 +1,27 @@
+{
+  "name": "inception-free-bridge",
+  "version": "1.0.0",
+  "description": "Portable, server-deployable OpenAI-compatible API in front of the free Inception chat (Mercury 3). Streaming, thinking/reasoning, tool-call shim, usage stats.",
+  "type": "module",
+  "main": "server.mjs",
+  "bin": {
+    "inception-free": "bin/inception-free"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs --browser-mode on --auto-refresh 5",
+    "warmup": "node warmup.mjs --output data/creds.json",
+    "creds": "node get-creds.mjs --output data/creds.json",
+    "doctor": "node bin/doctor.mjs",
+    "smoke": "node bin/smoke.mjs",
+    "test": "node test-tool-shim.mjs && node test-think.mjs && node test-page-script.mjs && node test-live-stream.mjs && node test-e2e.mjs",
+    "package": "bash bin/package.sh"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.64.1"
+  },
+  "license": "MIT"
+}

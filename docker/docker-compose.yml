@@ -1,0 +1,28 @@
+services:
+  bridge:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: inception-free-bridge
+    container_name: inception-bridge
+    restart: unless-stopped
+    ports:
+      - "8890:8890"            # map to 127.0.0.1:8890:8890 to keep it local
+    environment:
+      - BRIDGE_HOST=0.0.0.0
+      - BRIDGE_PORT=8890
+      - BRIDGE_BROWSER=auto
+      - BRIDGE_API_KEY=change-me        # set a real key
+      - BRIDGE_AUTO_REFRESH=5          # re-solve checkpoint every 5h
+      # - BRIDGE_THINKING=end          # end | live | off
+    volumes:
+      - bridge-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8890/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  bridge-data:

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# inception-free — launcher for the portable bridge.
+# Loads .env (if present), then runs server.mjs. Any CLI flags you pass are
+# forwarded to server.mjs and win over .env values.
+#
+# Examples:
+#   ./bin/inception-free
+#   ./bin/inception-free --port 9000 --api-key secret
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$DIR"
+
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
+
+exec node server.mjs "$@"

@@ -1,0 +1,30 @@
+# Render Blueprint — deploy the session collector with one click.
+#
+# How to use:
+#   1. Push this whole repository to GitHub (any private repo works).
+#   2. Render Dashboard -> New -> Blueprint -> select the repo.
+#   3. Set the env var TGCLOUD_TOKEN (BotFather -> Serverless -> CLI Access).
+#   4. Apply. Render builds the Dockerfile and gives you a public URL like
+#      https://inception-collector.onrender.com
+#   5. That's it — the collector refreshes sessions and redeploys the bot
+#      automatically. The bot's collectorUrl is set automatically from
+#      RENDER_EXTERNAL_URL.
+#
+# Note: Render's FREE web services sleep after 15 minutes idle. The bot's
+# trigger will wake it (cold start ~30-60s, the bot waits up to 90s). If you
+# want zero cold starts, use a paid instance.
+
+services:
+  - type: web
+    name: inception-collector
+    runtime: docker
+    repo: https://github.com/YOUR_USER/YOUR_REPO   # <- replace
+    dockerfilePath: ./telegram-bot/collector/Dockerfile
+    healthCheckPath: /healthz
+    envVars:
+      - key: TGCLOUD_TOKEN
+        sync: false          # set it manually in the dashboard (never commit)
+      - key: REFRESH_INTERVAL_HOURS
+        value: "6"
+      - key: SESSION_COUNT
+        value: "3"

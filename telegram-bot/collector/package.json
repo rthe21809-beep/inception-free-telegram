@@ -1,0 +1,13 @@
+{
+  "name": "inception-session-collector",
+  "version": "1.0.0",
+  "description": "Cloud session refresher for the Telegram serverless bot (chromium + tgcloud CLI). Runs on Railway / Render / any Docker host.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

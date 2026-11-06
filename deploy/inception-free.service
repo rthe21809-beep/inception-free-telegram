@@ -1,0 +1,43 @@
+# systemd unit for inception-free-bridge (bare-metal / VPS).
+#
+# Install:
+#   1. put the package in /opt/inception-free-bridge
+#   2. copy this file to /etc/systemd/system/inception-free.service
+#   3. create a non-root user, e.g.:  useradd -r -s /usr/sbin/nologin inception
+#   4. chown -R inception:inception /opt/inception-free-bridge
+#   5. systemctl daemon-reload && systemctl enable --now inception-free
+#
+# Environment file: /opt/inception-free-bridge/.env (see .env.example)
+# The launcher (bin/inception-free) sources .env automatically.
+
+[Unit]
+Description=Inception free-chat -> OpenAI-compatible bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=inception
+Group=inception
+WorkingDirectory=/opt/inception-free-bridge
+ExecStart=/opt/inception-free-bridge/bin/inception-free
+Restart=on-failure
+RestartSec=5
+# Rate-limit warmup/auto-refresh, cap memory.
+LimitNOFILE=65536
+MemoryMax=1G
+# Logs go to journald:  journalctl -u inception-free -f
+StandardOutput=journal
+StandardError=journal
+
+# Optional hardening (browser child needs a writable tmp + /dev/shm).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/inception-free-bridge /tmp /dev/shm
+RestrictSUIDSGID=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target
