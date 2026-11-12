@@ -39,9 +39,13 @@ const REPORT_SECRET = process.env.BOT_REPORT_SECRET;
 const die = (m) => { console.error('\nERROR: ' + m + '\n'); process.exit(1); };
 const ok = (m) => console.log('    ' + m);
 
-// ---------- 0. build the worker bundle (env.ASSETS fallback) ----------
+// ---------- 0. build the worker bundle ----------
+// Direct upload does NOT run Pages' own bundler, so the Pages Function must be
+// compiled into dist/_worker.js by hand (advanced mode). We ALSO inline every
+// static file into that worker: env.ASSETS is not guaranteed to exist for
+// direct uploads, and depending on it made the whole site 500.
 async function buildWorker() {
-  console.log('==> bundling API into dist/_worker.js');
+  console.log('==> bundling API + static assets into dist/_worker.js');
   if (!existsSync(FN)) die('missing ' + FN);
   if (!existsSync(join(DIST, 'index.html'))) die('dist/index.html missing — run "npm run build" in admin-panel first.');
 
@@ -49,25 +53,87 @@ async function buildWorker() {
   const esbuildPath = require.resolve('esbuild');
   const esbuild = (await import(pathToFileURL(esbuildPath).href)).default;
 
+  // collect static files (never the worker itself)
+  const types = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.json': 'application/json; charset=utf-8',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
+    '.ico': 'image/x-icon',
+    '.woff2': 'font/woff2',
+    '.txt': 'text/plain; charset=utf-8',
+  };
+  const assets = {};
+  (function walk(d) {
+    for (const n of readdirSync(d)) {
+      const p = join(d, n);
+      if (statSync(p).isDirectory()) { walk(p); continue; }
+      const key = '/' + relative(DIST, p).split('\\').join('/');
+      if (key === '/_worker.js') continue;
+      const ext = extname(p).toLowerCase();
+      const buf = readFileSync(p);
+      const binary = !['.html', '.js', '.css', '.svg', '.json', '.txt'].includes(ext);
+      assets[key] = {
+        t: types[ext] || 'application/octet-stream',
+        b: binary ? buf.toString('base64') : buf.toString('utf8'),
+        e: binary ? 1 : 0,
+      };
+    }
+  })(DIST);
+
   const wrapper = `
 import { onRequest } from ${JSON.stringify(FN)};
+
+const ASSETS = ${JSON.stringify(assets)};
+
+function bytes(s, isB64) {
+  if (!isB64) return new TextEncoder().encode(s);
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function serveStatic(url, request) {
+  let key = url.pathname;
+  const hit = ASSETS[key] || ASSETS[key + '/index.html'] || ASSETS['/index.html'];
+  if (!hit) return new Response('Not found', { status: 404 });
+  const body = bytes(hit.b, hit.e);
+  const headers = { 'content-type': hit.t };
+  const immutable = key.startsWith('/assets/');
+  headers['cache-control'] = immutable ? 'public, max-age=31536000, immutable' : 'no-cache';
+  return new Response(request.method === 'HEAD' ? null : body, { status: 200, headers });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
-      return onRequest({
-        request,
-        env,
-        ctx,
-        params: {},
-        data: {},
-        functionPath: url.pathname,
-        next: () => env.ASSETS.fetch(request),
-        waitUntil: (p) => ctx.waitUntil(p),
-        passThroughOnException: () => {},
-      });
+    try {
+      if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
+        const resp = await onRequest({
+          request, env, ctx,
+          params: {}, data: {},
+          functionPath: url.pathname,
+          next: () => serveStatic(url, request),
+          waitUntil: (p) => { if (ctx && ctx.waitUntil) ctx.waitUntil(p); },
+          passThroughOnException: () => {},
+        });
+        if (resp) return resp;
+        return new Response('Not found', { status: 404 });
+      }
+      return serveStatic(url, request);
+    } catch (e) {
+      // Never hide the failure: a blank 500 is undebuggable.
+      return new Response(
+        'WORKER ERROR: ' + String(e && (e.stack || e.message) || e),
+        { status: 500, headers: { 'content-type': 'text/plain; charset=utf-8' } }
+      );
     }
-    return env.ASSETS ? env.ASSETS.fetch(request) : new Response('Not found', { status: 404 });
   },
 };
 `;
@@ -83,7 +149,8 @@ export default {
     logLevel: 'warning',
   });
   const size = statSync(join(DIST, '_worker.js')).size;
-  ok(`_worker.js ${(size / 1024).toFixed(1)} kB`);
+  ok(`_worker.js ${(size / 1024).toFixed(1)} kB  (${Object.keys(assets).length} assets inlined)`);
+  if (size > 900 * 1024) console.warn('    WARNING: close to the 1 MB worker limit');
 }
 
 // ---------- cloudflare REST ----------
@@ -195,9 +262,18 @@ async function main() {
     form.append(hash, new Blob([buf], { type }), hash);
   }
   const dep = await cf(`/accounts/${acct}/pages/projects/${PROJECT}/deployments`, { method: 'POST', body: form });
-  const url = dep.result?.url || `https://${PROJECT}.pages.dev`;
-  console.log('\nDONE. Panel deployed to: ' + url);
-  console.log('Use it as reportUrl in tgcloud/lib/runtime-config.js\n');
+
+  // dep.result.url is the *per-deploy* hash alias — it changes on every push and
+  // is useless for config. The canonical URL is always <project>.pages.dev.
+  const stable = `https://${PROJECT}.pages.dev`;
+  console.log('\nDONE. Panel deployed.');
+  console.log('  canonical URL : ' + stable);
+  if (dep.result?.url && !dep.result.url.includes(`${PROJECT}.pages.dev`)) {
+    console.log('  preview alias : ' + dep.result.url + '  (per-deploy, do not use)');
+  } else if (dep.result?.url && dep.result.url !== stable && /[0-9a-f]{8}\./.test(dep.result.url)) {
+    console.log('  deploy alias  : ' + dep.result.url + '  (per-deploy, do not use)');
+  }
+  console.log('\nUse the canonical URL as reportUrl in tgcloud/lib/runtime-config.js\n');
 }
 
 main().catch((e) => { console.error('\nFAILED: ' + e.message + '\n'); process.exit(1); });
