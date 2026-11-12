@@ -4,7 +4,7 @@
   "description": "Serverless Telegram chatbot powered by inception-free-bridge (Mercury 3 free chat) — runs on Telegram Serverless (tgcloud).",
   "type": "module",
   "scripts": {
-    "test": "node test-engine.mjs && node test-tgupstream.mjs && node test-providers.mjs && node test-control.mjs && node test-proxy-pool.mjs && node test-live-config.mjs",
+    "test": "node test-engine.mjs && node test-tgupstream.mjs && node test-providers.mjs && node test-control.mjs && node test-proxy-pool.mjs && node test-live-config.mjs && node test-admin-cmd.mjs",
     "sessions": "node tools/update-sessions.mjs",
     "deploy": "npx tgcloud push",
     "status": "npx tgcloud status",

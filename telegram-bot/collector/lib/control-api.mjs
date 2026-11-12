@@ -23,9 +23,44 @@ const REPORT_SECRET = process.env.BOT_REPORT_SECRET || '';
 export function createControlApi({ state, botDir, run, defaultCfgPath, cfgPath, tgCloudPush }) {
   const PANEL_DIR = path.join(botDir, 'admin-panel', 'dist');
 
-  // ---------- Telegram initData verification ----------
+  // ---------- security: rate limiting ----------
+  const RATE_WINDOW_MS = 60_000;
+  const RATE_MAX = 60; // requests per window per key
+  const rateMap = new Map();
+  function rateLimit(key) {
+    const now = Date.now();
+    const e = rateMap.get(key);
+    if (!e || now - e.start > RATE_WINDOW_MS) {
+      rateMap.set(key, { start: now, count: 1 });
+      return false;
+    }
+    e.count++;
+    if (rateMap.size > 5000) rateMap.clear();
+    return e.count > RATE_MAX;
+  }
+
+  // ---------- security headers on every response ----------
+  const SEC_HEADERS = {
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+    'Cache-Control': 'no-store',
+    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+  };
+
+  // ---------- Telegram initData verification (hardened) ----------
   // initData is "key=value&key2=value2&hash=<hex>"; hash is HMAC-SHA256 of
   // query-string-minus-hash with key = HMAC-SHA256(bot_token, "WebAppData").
+  const MAX_INITDATA_AGE_MS = 60 * 60 * 1000; // reject initData older than 1h (replay protection)
+  function timingSafeEqualHex(a, b) {
+    try {
+      const ba = Buffer.from(a, 'hex');
+      const bb = Buffer.from(b, 'hex');
+      if (ba.length !== bb.length) return false;
+      return crypto.timingSafeEqual(ba, bb);
+    } catch { return false; }
+  }
+
   function verifyInitData(raw) {
     try {
       if (!raw || !BOT_TOKEN) return null;
@@ -39,10 +74,14 @@ export function createControlApi({ state, botDir, run, defaultCfgPath, cfgPath, 
         .join('\n');
       const secretKey = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
       const computed = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
-      if (computed !== hash) return null;
+      if (!timingSafeEqualHex(computed, hash)) return null;
+      // replay protection: auth_date must be recent
+      const authDate = parseInt(params.get('auth_date') || '0', 10);
+      if (!authDate || Date.now() / 1000 - authDate > MAX_INITDATA_AGE_MS / 1000) return null;
       const user = params.get('user');
       if (!user) return null;
       const u = JSON.parse(user);
+      if (!u.id) return null;
       return { id: Number(u.id), username: u.username || '', firstName: u.first_name || '' };
     } catch {
       return null;
@@ -50,9 +89,12 @@ export function createControlApi({ state, botDir, run, defaultCfgPath, cfgPath, 
   }
 
   function requireMember(req) {
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
+    if (rateLimit('init:' + ip)) return { error: 429, msg: 'rate limited' };
     const initData = req.headers['x-telegram-init-data'] || '';
     const u = verifyInitData(initData);
     if (!u) return { error: 401, msg: 'unauthorized' };
+    if (rateLimit('user:' + u.id)) return { error: 429, msg: 'rate limited' };
     return { user: u };
   }
 
@@ -63,17 +105,29 @@ export function createControlApi({ state, botDir, run, defaultCfgPath, cfgPath, 
     return { user: m.user };
   }
 
-  function requireOwnerOrSelf(req) {
+  function requireOwner(req) {
     const m = requireMember(req);
     if (m.error) return m;
-    if (!state.isAdmin(m.user.id)) return { error: 403, msg: 'forbidden' };
+    if (!state.isOwner(m.user.id)) return { error: 403, msg: 'forbidden: owner only' };
     return { user: m.user };
+  }
+
+  // Bearer-secret auth for bot <-> control-plane calls.
+  function requireSecret(req) {
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
+    if (rateLimit('secret:' + ip)) return { error: 429, msg: 'rate limited' };
+    const auth = req.headers['authorization'] || '';
+    if (!REPORT_SECRET || auth.length !== `Bearer ${REPORT_SECRET}`.length) return { error: 401, msg: 'unauthorized' };
+    if (!timingSafeEqualHex(Buffer.from(auth.slice(7)).toString('hex'), Buffer.from(REPORT_SECRET).toString('hex'))) {
+      return { error: 401, msg: 'unauthorized' };
+    }
+    return { ok: true };
   }
 
   // ---------- response helpers ----------
   function json(res, code, obj) {
     const body = JSON.stringify(obj);
-    res.writeHead(code, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+    res.writeHead(code, { ...SEC_HEADERS, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
     res.end(body);
   }
 
@@ -125,9 +179,11 @@ export function createControlApi({ state, botDir, run, defaultCfgPath, cfgPath, 
       };
       const file = 'export const runtimeConfig = ' + JSON.stringify(runtime, null, 2) + ';\n';
       fs.writeFileSync(path.join(botDir, 'tgcloud', 'lib', 'runtime-config.js'), file);
+      // The bot pulls live config from /api/runtime-config, so the push is
+      // only a fallback — fire it in the background so the API replies fast.
       if (tgCloudPush) {
-        console.log(`[control] config regenerated (epoch ${s.configEpoch}) — pushing bot… ${reason}`);
-        await tgCloudPush();
+        console.log(`[control] config regenerated (epoch ${s.configEpoch}) — pushing bot in background… ${reason}`);
+        Promise.resolve(tgCloudPush()).catch(() => {});
       } else {
         console.log(`[control] config regenerated (epoch ${s.configEpoch}) — push disabled ${reason}`);
       }
@@ -169,8 +225,8 @@ export function createControlApi({ state, botDir, run, defaultCfgPath, cfgPath, 
 
     // ---- bot reporting (server-to-server) ----
     if (p === '/api/report' && method === 'POST') {
-      const auth = req.headers['authorization'] || '';
-      if (!REPORT_SECRET || auth !== `Bearer ${REPORT_SECRET}`) return json(res, 401, { error: 'unauthorized' });
+      const sa = requireSecret(req);
+      if (sa.error) return json(res, sa.error, { error: sa.msg });
       try {
         const body = await jsonBody(req);
         // body: { uid, username, firstName, provider, model, tokensIn, tokensOut,
@@ -199,8 +255,8 @@ export function createControlApi({ state, botDir, run, defaultCfgPath, cfgPath, 
 
     // ---- bot runtime config (server-to-server, real keys) ----
     if (p === '/api/runtime-config' && method === 'GET') {
-      const auth = req.headers['authorization'] || '';
-      if (!REPORT_SECRET || auth !== `Bearer ${REPORT_SECRET}`) return json(res, 401, { error: 'unauthorized' });
+      const sa = requireSecret(req);
+      if (sa.error) return json(res, sa.error, { error: sa.msg });
       const s = state.state;
       return json(res, 200, {
         mode: 'api',
@@ -229,6 +285,52 @@ export function createControlApi({ state, botDir, run, defaultCfgPath, cfgPath, 
       });
     }
 
+    // ---- bot command API (server-to-server, Bearer secret) ----
+    // Used by the in-bot /admin commands. Same store as the panel.
+    if (p.startsWith('/api/bot/') && method === 'POST') {
+      const sa = requireSecret(req);
+      if (sa.error) return json(res, sa.error, { error: sa.msg });
+      try {
+        const b = await jsonBody(req);
+        const op = p.slice('/api/bot/'.length);
+        switch (op) {
+          case 'providers': return json(res, 200, { providers: state.listProviders() });
+          case 'providers/add': return json(res, 200, { provider: state.addProvider(b) });
+          case 'providers/remove': return json(res, 200, { provider: state.removeProvider(b.id) });
+          case 'providers/toggle': return json(res, 200, { provider: state.toggleProvider(b.id, b.enabled) });
+          case 'keys/add': return json(res, 200, { key: state.addKey(b.id, b.key) });
+          case 'keys/remove': return json(res, 200, { provider: state.removeKey(b.id, b.keyId) });
+          case 'models': return json(res, 200, { models: state.listModels(), activeModelId: state.state.settings.defaultModelId });
+          case 'models/add': return json(res, 200, { model: state.addModel(b) });
+          case 'models/remove': return json(res, 200, { model: state.removeModel(b.id) });
+          case 'models/active': return json(res, 200, { model: state.setActiveModel(b.id) });
+          case 'models/toggle': return json(res, 200, { model: state.toggleModel(b.id, b.enabled) });
+          case 'models/prompt': return json(res, 200, { model: state.setModelPrompt(b.id, b.prompt) });
+          case 'models/temperature': return json(res, 200, { model: state.setModelTemperature(b.id, b.temperature) });
+          case 'admins': return json(res, 200, { owner: state.state.ownerId, admins: state.listAdmins() });
+          case 'admins/add': return json(res, 200, { admins: state.addAdmin(b.id, b.username || '') });
+          case 'admins/remove': return json(res, 200, { admins: state.removeAdmin(b.id) });
+          case 'settings': return json(res, 200, { settings: state.state.settings });
+          case 'settings/set': return json(res, 200, { settings: state.setSetting(b.key, b.value) });
+          case 'users': return json(res, 200, { users: state.topUsers(b.limit || 20), total: Object.keys(state.state.users).length });
+          case 'user': return json(res, 200, { user: state.state.users[Number(b.uid)] || null, logs: state.userLogs(b.uid, 50) });
+          case 'logs': return json(res, 200, { logs: state.state.logs.slice(-(b.limit || 50)).reverse() });
+          case 'stats': {
+            const users = Object.values(state.state.users);
+            const sum = fn => users.reduce((a, u) => a + (fn(u) || 0), 0);
+            return json(res, 200, { totalUsers: users.length, totalMessages: sum(u => u.messages), totalTokensIn: sum(u => u.tokensIn), totalTokensOut: sum(u => u.tokensOut), totalLogs: state.state.logs.length });
+          }
+          case 'state': {
+            const snap = state.snapshot();
+            return json(res, 200, snap);
+          }
+          default: return json(res, 404, { error: 'unknown op' });
+        }
+      } catch (e) {
+        return json(res, 400, { error: String(e?.message || e).slice(0, 200) });
+      }
+    }
+
     // ---- panel API (auth-gated) ----
     if (p.startsWith('/api/')) {
       const auth = requireAdmin(req);
@@ -249,14 +351,16 @@ export function createControlApi({ state, botDir, run, defaultCfgPath, cfgPath, 
           return json(res, 200, { owner: state.state.ownerId, admins: state.listAdmins() });
         }
 
-        // ---- admins ----
+        // ---- admins (OWNER ONLY) ----
         if (p === '/api/admins/add' && method === 'POST') {
+          if (!state.isOwner(auth.user.id)) return json(res, 403, { error: 'owner only' });
           const b = await jsonBody(req);
           const admins = state.addAdmin(b.id, b.username || '');
           await regenerateAndPush('admin added');
           return json(res, 200, { admins });
         }
         if (p === '/api/admins/remove' && method === 'POST') {
+          if (!state.isOwner(auth.user.id)) return json(res, 403, { error: 'owner only' });
           const b = await jsonBody(req);
           const admins = state.removeAdmin(b.id);
           await regenerateAndPush('admin removed');
@@ -390,7 +494,7 @@ export function createControlApi({ state, botDir, run, defaultCfgPath, cfgPath, 
   function serveStatic(res, file, type) {
     try {
       const data = fs.readFileSync(file);
-      res.writeHead(200, { 'Content-Type': type, 'Content-Length': data.length });
+      res.writeHead(200, { ...SEC_HEADERS, 'Content-Type': type, 'Content-Length': data.length });
       res.end(data);
     } catch {
       return json(res, 404, { error: 'not found' });

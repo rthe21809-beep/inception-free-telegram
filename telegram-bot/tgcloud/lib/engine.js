@@ -60,7 +60,27 @@ export async function handleMessage(message, deps) {
       return;
     }
     if (cmd === '/admin') {
-      await handleAdminCommand(api, chatId, message, cfg);
+      const { isOwner, handleAdminCommand } = await import('./admin-cmd.js');
+      if (!isOwner(message.from?.id)) {
+        // do not reveal that /admin exists to non-owners
+        await api.sendMessage({ chat_id: chatId, text: 'Unknown command. Try /help.' });
+        return;
+      }
+      const sub = text.split(/\s+/)[1];
+      if (sub) {
+        await handleAdminCommand(api, chatId, message, cfg, text);
+      } else {
+        // bare /admin: in-bot menu + web panel button
+        await api.sendMessage({
+          chat_id: chatId,
+          text: '🛠 <b>Admin</b>\n\nUse /admin &lt;command&gt; (see /admin help) or open the web panel:',
+          parse_mode: 'HTML',
+          reply_markup: (cfg.reportUrl && cfg.reportSecret) ? {
+            inline_keyboard: [[{ text: '🌐 Open Admin Panel', web_app: { url: String(cfg.reportUrl).replace(/\/+$/, '') + '/panel' } }]],
+          } : undefined,
+        });
+        await handleAdminCommand(api, chatId, message, cfg, '/admin help');
+      }
       return;
     }
     await api.sendMessage({ chat_id: chatId, text: 'Unknown command. Try /help.' });
@@ -178,35 +198,4 @@ export async function handleMessage(message, deps) {
       });
     } catch { /* reporting is best-effort */ }
   }
-}
-
-// Owner/admin command. The Mini App needs to run inside Telegram, so we send
-// an inline keyboard with a WebApp button pointing at the control plane. A
-// plain fallback reply is used when no panel URL is configured.
-async function handleAdminCommand(api, chatId, message, cfg) {
-  const uid = message.from?.id;
-  const panelUrl = String(cfg.reportUrl || '').replace(/\/+$/, '') + '/panel';
-  const isOwner = uid === 6940999328;
-  // Admins are defined on the control plane; here we optimistically allow the
-  // owner. Fine-grained gating happens server-side on /api/*.
-  if (!isOwner) {
-    await api.sendMessage({ chat_id: chatId, text: '⚠️ This command is for the owner only.' });
-    return;
-  }
-  if (!panelUrl || panelUrl === '/panel') {
-    await api.sendMessage({ chat_id: chatId, text: 'Admin panel is not configured (no control-plane URL).' });
-    return;
-  }
-  await api.sendMessage({
-    chat_id: chatId,
-    text: 'Open the admin panel:',
-    reply_markup: {
-      inline_keyboard: [[
-        {
-          text: '🛠 Open Admin Panel',
-          web_app: { url: panelUrl },
-        },
-      ]],
-    },
-  });
 }

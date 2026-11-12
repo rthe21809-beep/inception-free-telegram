@@ -26,6 +26,7 @@ export function helpText(cfg = config) {
     '  /start  — show this message',
     '  /help   — show this message',
     '  /model  — show the model in use',
+    '  /admin  — owner admin panel (providers, models, keys, users, logs)',
     '',
     `Model: ${cfg.model}`,
   ].join('\n');
