@@ -197,6 +197,38 @@ export function createControlApi({ state, botDir, run, defaultCfgPath, cfgPath, 
       }
     }
 
+    // ---- bot runtime config (server-to-server, real keys) ----
+    if (p === '/api/runtime-config' && method === 'GET') {
+      const auth = req.headers['authorization'] || '';
+      if (!REPORT_SECRET || auth !== `Bearer ${REPORT_SECRET}`) return json(res, 401, { error: 'unauthorized' });
+      const s = state.state;
+      return json(res, 200, {
+        mode: 'api',
+        activeModelId: s.settings.defaultModelId,
+        providers: s.providers.map(p => ({
+          id: p.id,
+          name: p.name,
+          baseUrl: p.baseUrl,
+          enabled: p.enabled,
+          keys: (p.keys || []).map(k => ({ id: k.id, value: k.value })),
+        })),
+        models: s.models.map(m => ({
+          id: m.id, providerId: m.providerId, upstreamId: m.upstreamId,
+          label: m.label, enabled: m.enabled, temperature: m.temperature,
+          systemPrompt: m.systemPrompt,
+        })),
+        settings: {
+          showThinking: s.settings.showThinking,
+          thinkingPreviewChars: s.settings.thinkingPreviewChars,
+          maxHistoryTurns: s.settings.maxHistoryTurns,
+          allowGroups: s.settings.allowGroups,
+          defaultSystemPrompt: s.settings.defaultSystemPrompt,
+          defaultModelId: s.settings.defaultModelId,
+        },
+        configEpoch: s.configEpoch,
+      });
+    }
+
     // ---- panel API (auth-gated) ----
     if (p.startsWith('/api/')) {
       const auth = requireAdmin(req);

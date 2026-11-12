@@ -26,12 +26,16 @@ async function saveTurn(chatId, role, content) {
 
 export default async function (message) {
   const { config } = await import('../lib/config.js');
+  const { fetchLiveConfig, mergeConfig } = await import('../lib/live-config.js');
   const report = createReport({
     reportUrl: config.reportUrl,
     reportSecret: config.reportSecret,
   });
+  // live config from the control plane (so panel edits apply without redeploy)
+  const live = await fetchLiveConfig({ url: config.reportUrl, secret: config.reportSecret }).catch(() => null);
+  const cfg = mergeConfig(config, live);
   try {
-    await handleMessage(message, { api, db, getHistory, saveTurn, report });
+    await handleMessage(message, { api, db, getHistory, saveTurn, report, config: cfg });
   } catch (err) {
     console.error('[message] unhandled error:', String(err?.stack || err).slice(0, 400));
     try {
