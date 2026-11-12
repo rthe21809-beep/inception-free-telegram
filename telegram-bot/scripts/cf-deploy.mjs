@@ -16,7 +16,7 @@
 //   export BOT_REPORT_SECRET=...
 //   node scripts/cf-deploy.mjs            # add --dry-run to build+hash only
 //
-import { createHash } from 'node:crypto';
+import { hash as blake3 } from 'blake3-wasm';
 import { createRequire } from 'node:module';
 import { readFileSync, readdirSync, statSync, writeFileSync, existsSync } from 'node:fs';
 import { join, relative, extname, dirname } from 'node:path';
@@ -226,7 +226,7 @@ async function main() {
   });
   ok(`CONTROL_KV bound; secrets: ${Object.keys(env_vars).join(', ') || '(none exported)'}`);
 
-  console.log('==> 4/5 hashing dist/');
+  console.log('==> 4/5 hashing + uploading assets');
   const files = [];
   (function walk(d) {
     for (const n of readdirSync(d)) {
@@ -237,30 +237,72 @@ async function main() {
   })(DIST);
   if (!files.length) die('dist/ is empty.');
 
+  // Cloudflare Pages does NOT accept SHA-256 here.
+  // Its asset key is: blake3(base64(contents) + extension).hex()[0..32]
+  // and the bytes must be registered via /pages/assets/upload before the
+  // deployment references them. Getting this wrong still returns a "successful"
+  // deployment that serves nothing (empty 500 on every path).
   const manifest = {};
-  const blobs = new Map();
+  const assets = new Map();
   for (const f of files) {
+    const rel = relative(DIST, f).split('\\').join('/');
     const buf = readFileSync(f);
-    const hash = createHash('sha256').update(buf).digest('hex');
-    const key = '/' + relative(DIST, f).split('\\').join('/');
-    manifest[key] = hash;
-    if (!blobs.has(hash)) blobs.set(hash, { buf, key });
+    const ext = extname(rel).replace(/^\./, '');
+    const hash = blake3(buf.toString('base64') + ext).toString('hex').slice(0, 32);
+    manifest['/' + rel] = hash;
+    if (!assets.has(hash)) {
+      assets.set(hash, { buf, ext: extname(rel) });
+    }
   }
-  ok(`${files.length} files / ${blobs.size} unique`);
+  ok(`${files.length} files / ${assets.size} unique`);
 
-  console.log('==> 5/5 uploading deployment');
+  // Phase 1: get a short-lived JWT purely for asset operations.
+  const tok = await cf(`/accounts/${acct}/pages/projects/${PROJECT}/upload-token`);
+  const jwt = tok.result && tok.result.jwt;
+  if (!jwt) die('upload-token returned no jwt');
+
+  // Phase 2: tell the API which hashes we are about to send, then send them.
+  const hashes = [...assets.keys()];
+  let missing = hashes;
+  try {
+    const cm = await fetch(`${API}/pages/assets/check-missing`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${jwt}` },
+      body: JSON.stringify({ hashes }),
+    });
+    const cj = await cm.json();
+    if (cm.ok && Array.isArray(cj.result)) missing = cj.result;
+  } catch { /* fall back to uploading everything */ }
+
+  if (missing.length) {
+    const payload = missing.map((h) => ({
+      key: h,
+      value: assets.get(h).buf.toString('base64'),
+      metadata: { contentType: mimeFor(assets.get(h).ext) },
+      base64: true,
+    }));
+    const up = await fetch(`${API}/pages/assets/upload`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${jwt}` },
+      body: JSON.stringify(payload),
+    });
+    const ut = await up.text();
+    if (!up.ok) die(`asset upload failed: ${up.status} ${ut.slice(0, 300)}`);
+    // Record hashes so future deploys can skip them (optional, best-effort).
+    try {
+      await fetch(`${API}/pages/assets/upsert-hashes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${jwt}` },
+        body: JSON.stringify({ hashes }),
+      });
+    } catch { /* non-fatal */ }
+  }
+  ok(`${missing.length} asset(s) uploaded, ${assets.size - missing.length} already cached`);
+
+  console.log('==> 5/5 creating deployment');
   const form = new FormData();
   form.set('manifest', JSON.stringify(manifest));
   form.set('branch', 'main');
-  for (const [hash, { buf, key }] of blobs) {
-    const type = extname(key) === '.html' ? 'text/html'
-      : extname(key) === '.css' ? 'text/css'
-      : extname(key) === '.js' ? 'application/javascript'
-      : extname(key) === '.svg' ? 'image/svg+xml'
-      : extname(key) === '.json' ? 'application/json'
-      : 'application/octet-stream';
-    form.append(hash, new Blob([buf], { type }), hash);
-  }
   const dep = await cf(`/accounts/${acct}/pages/projects/${PROJECT}/deployments`, { method: 'POST', body: form });
 
   // dep.result.url is the *per-deploy* hash alias — it changes on every push and
@@ -272,6 +314,32 @@ async function main() {
     console.log('  preview alias : ' + dep.result.url + '  (per-deploy, do not use)');
   } else if (dep.result?.url && dep.result.url !== stable && /[0-9a-f]{8}\./.test(dep.result.url)) {
     console.log('  deploy alias  : ' + dep.result.url + '  (per-deploy, do not use)');
+  }
+  // Self-verify: a deploy can "succeed" while the site 500s with an empty body.
+  // Never report success without actually fetching the URL.
+  console.log('==> verifying the site actually serves traffic');
+  let verdict = 'UNKNOWN';
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    try {
+      const r = await fetch(stable + '/?v=' + Date.now(), { redirect: 'manual' });
+      const body = await r.text();
+      const ct = r.headers.get('content-type') || '';
+      if (r.status === 200 && body.length > 0) { verdict = 'OK'; }
+      else verdict = `${r.status} (${body.length} bytes, content-type: ${ct || 'MISSING'})`;
+      if (r.status === 200 && body.length > 0) break;
+    } catch (e) { verdict = 'fetch error: ' + e.message; }
+    if (attempt < 6) { console.log(`    attempt ${attempt}: ${verdict} — retrying in 10s`); await new Promise((r) => setTimeout(r, 10000)); }
+  }
+
+  if (verdict === 'OK') {
+    console.log('    OK — panel is live.');
+  } else {
+    console.log('');
+    console.log('  !! DEPLOY ACCEPTED BUT THE SITE IS NOT SERVING: ' + verdict);
+    console.log('     An empty body with no content-type means _worker.js fails to');
+    console.log('     LOAD (not a per-request error). Run the bisection diagnostic:');
+    console.log('       node /sdcard/Download/DSHA/dfix.mjs');
+    console.log('     It deploys 4 isolated projects and prints which layer breaks.');
   }
   console.log('\nUse the canonical URL as reportUrl in tgcloud/lib/runtime-config.js\n');
 }

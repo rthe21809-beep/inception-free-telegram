@@ -36,7 +36,14 @@ echo "    node $NODE_V"
 cd "$PANEL_DIR"
 
 echo "==> 1/4 Installing deps + building panel"
-npm install
+# Root dep: the deployer hashes assets with blake3 (Cloudflare asset keys).
+# It must be installed at the repo root, not inside admin-panel/.
+( cd "$HERE/.." && npm install --no-audit --no-fund --silent ) || {
+  echo "root npm install failed; blake3-wasm is required by cf-deploy.mjs" >&2
+  exit 1
+}
+cd "$PANEL_DIR"
+npm install --no-audit --no-fund
 npm run build
 
 echo

@@ -1,15 +1,18 @@
 {
   "name": "telegram-serverless-inception-bot",
   "version": "1.0.0",
-  "description": "Serverless Telegram chatbot powered by inception-free-bridge (Mercury 3 free chat) — runs on Telegram Serverless (tgcloud).",
+  "description": "Serverless Telegram chatbot powered by inception-free-bridge (Mercury 3 free chat) \u2014 runs on Telegram Serverless (tgcloud).",
   "type": "module",
   "scripts": {
-    "test": "node test-engine.mjs && node test-tgupstream.mjs && node test-providers.mjs && node test-control.mjs && node test-proxy-pool.mjs && node test-live-config.mjs && node test-admin-cmd.mjs && node test-worker.mjs && node test-worker-bundle.mjs",
+    "test": "node test-engine.mjs && node test-tgupstream.mjs && node test-providers.mjs && node test-control.mjs && node test-proxy-pool.mjs && node test-live-config.mjs && node test-admin-cmd.mjs && node test-worker.mjs && node test-worker-bundle.mjs && node test-deploy-hash.mjs",
     "sessions": "node tools/update-sessions.mjs",
     "deploy": "npx tgcloud push",
     "status": "npx tgcloud status",
     "run": "npx tgcloud run",
     "webhook": "npx tgcloud webhook"
+  },
+  "dependencies": {
+    "blake3-wasm": "^2.1.5"
   },
   "engines": {
     "node": ">=18"
