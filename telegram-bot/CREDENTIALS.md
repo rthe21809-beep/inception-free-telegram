@@ -37,8 +37,8 @@ Also in **@BotFather**:
 9. In Termux: `export CLOUDFLARE_API_TOKEN=<that token>`
 
 ## 4. Cloudflare KV namespace ID — where panel state is stored
-1. In **https://dash.cloudflare.com**, left sidebar: **Workers & Pages → KV → Namespaces**
-   (direct: https://dash.cloudflare.com → your account → Workers & Pages → KV)
+1. In **https://dash.cloudflare.com**, left sidebar: **Storage → KV → Namespaces**
+   (Cloudflare moved KV under the **Storage** tab; some accounts still show it under Workers & Pages)
 2. Click **Create namespace**, title it exactly `CONTROL_KV`, click **Add**.
 3. Click the new namespace — you'll see its **Namespace ID**: a 32-character
    hex string like `a1b2c3…`. Copy it.
@@ -70,7 +70,7 @@ Copy the 64-char output. You paste it into Cloudflare as **BOT_REPORT_SECRET**
 | 1 | bot token | @BotFather `/token` | `123456:AA…` | Cloudflare secret `BOT_TOKEN` |
 | 2 | tgcloud token | @BotFather → bot → Serverless → CLI Access | `app…:secret` | `npx tgcloud login` |
 | 3 | CF API token | dash.cloudflare.com/profile/api-tokens | long random | `export CLOUDFLARE_API_TOKEN` |
-| 4 | KV namespace id | dash.cloudflare.com → Workers & Pages → KV | 32-hex | `export CONTROL_KV_ID` |
+| 4 | KV namespace id | dash.cloudflare.com → Storage → KV | 32-hex | `export CONTROL_KV_ID` |
 | 5 | Inception key | platform.inceptionlabs.ai/dashboard/api-keys | `sk-…` | add in panel via `/admin` |
 | 6 | report secret | `openssl rand -hex 32` (Termux) | 64-hex | CF secret + runtime-config.js |
 

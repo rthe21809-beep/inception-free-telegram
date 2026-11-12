@@ -28,7 +28,7 @@ cd ~/inception-free-telegram/telegram-bot
 ## 2. Deploy the panel to Cloudflare (from Termux)
 You need a **Cloudflare API token** (create at dash.cloudflare.com → My
 Profile → API Tokens → "Edit Cloudflare Workers" template), and a **KV
-namespace** (Workers & Pages → KV → Create namespace `CONTROL_KV`).
+namespace** (**Storage → KV → Namespaces → Create**, name it `CONTROL_KV`).
 
 ```bash
 cd ~/inception-free-telegram/telegram-bot
@@ -76,6 +76,30 @@ Then just send any message — the bot answers through your `sk-` key.
 cd ~/inception-free-telegram && git pull origin main
 cd telegram-bot && npx tgcloud push
 ```
+
+## 7. Troubleshooting
+
+### `CANNOT LINK EXECUTABLE "node": library "libicui18n.so.79" not found`
+Termux's `node` was built against ICU 79 but your `libicu` is a different
+version (the mirror drifted mid-upgrade). Node won't run at all until fixed:
+```bash
+termux-change-repo            # pick ONE mirror (e.g. Mirrors by Grimler), NOT "Rotate"
+pkg update -y && pkg upgrade -y
+pkg reinstall -y nodejs libicu
+node -v                       # must print v20+ with no linker error
+```
+If it still fails, pick a different single mirror and repeat. Then re-run
+`bash scripts/termux-deploy-panel.sh` (it now preflights node and prints this
+same fix).
+
+### `fatal: Need to specify how to reconcile divergent branches`
+Your clone is on old commits I later rewrote. Just match the remote:
+```bash
+git fetch origin && git reset --hard origin/main
+```
+
+### `bash: scripts/termux-deploy-panel.sh: No such file or directory`
+You are on a pre-v8 commit; run the `git fetch && git reset --hard` above.
 
 ---
 ## What only YOU can do (I can't, I don't have your accounts/secrets)

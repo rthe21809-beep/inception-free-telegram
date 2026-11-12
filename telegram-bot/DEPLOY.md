@@ -19,7 +19,7 @@ wrangler login                  # opens browser, authorize Cloudflare
 ```
 
 ### 2. Create the KV namespace (stores providers/keys/models/users/logs)
-Dashboard: **Workers & Pages → KV → Create namespace**, name it `CONTROL_KV`.
+Dashboard: **Storage → KV → Namespaces → Create namespace**, name it `CONTROL_KV` (older accounts: Workers & Pages → KV).
 Copy the **Namespace ID**.
 (Optional) create a second one named `CONTROL_KV_PREVIEW` for `wrangler pages dev`.
 

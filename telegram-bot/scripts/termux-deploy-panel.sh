@@ -2,13 +2,37 @@
 # Deploy the admin panel + API to Cloudflare Pages from Termux.
 # Run AFTER you cloned the repo. Needs: node, and a Cloudflare API token.
 #
-#   cd ~/inception-free-telegram/telegram-bot
+#   cd <repo>/telegram-bot
 #   bash scripts/termux-deploy-panel.sh
 #
 set -euo pipefail
 
 PANEL_DIR="$(cd "$(dirname "$0")/../admin-panel" && pwd)"
 PROJECT=inception-panel
+
+# ---- preflight: node must actually run (Termux ICU breakage is common) ----
+echo "==> 0/5 Checking node"
+if ! command -v node >/dev/null 2>&1; then
+  echo "ERROR: node is not installed."
+  echo "Fix:  pkg install -y nodejs"
+  exit 1
+fi
+if ! NODE_V="$(node -v 2>&1)"; then
+  echo "ERROR: node is installed but cannot run:"
+  echo "  $NODE_V"
+  echo
+  echo "This is the Termux libicu version mismatch. Fix with:"
+  echo "  termux-change-repo        # pick ONE mirror (not Rotate)"
+  echo "  pkg update -y && pkg upgrade -y"
+  echo "  pkg reinstall -y nodejs libicu"
+  echo "  node -v                   # must print a version, then re-run this script"
+  exit 1
+fi
+echo "    node $NODE_V"
+if ! command -v npm >/dev/null 2>&1; then
+  echo "ERROR: npm missing. Fix: pkg reinstall -y nodejs"
+  exit 1
+fi
 
 cd "$PANEL_DIR"
 
@@ -20,7 +44,8 @@ echo
 echo "==> 2/5 Cloudflare API token"
 if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
   echo "Create one at: https://dash.cloudflare.com/profile/api-tokens"
-  echo "Use template 'Edit Cloudflare Workers' (gives Pages:Edit + KV:Edit)."
+  echo "Custom token with: Account -> Cloudflare Pages -> Edit"
+  echo "                   Account -> Workers KV Storage -> Edit"
   echo "Then run:  export CLOUDFLARE_API_TOKEN=xxxxxxxx"
   echo "and re-run this script."
   exit 1
@@ -29,7 +54,7 @@ fi
 echo "==> 3/5 KV namespace id"
 KVID="${CONTROL_KV_ID:-}"
 if [ -z "$KVID" ]; then
-  echo "Create namespace: Workers & Pages -> KV -> Create namespace -> name it CONTROL_KV"
+  echo "Create namespace: dash.cloudflare.com -> Storage -> KV -> Namespaces -> Create"
   echo "Then:  export CONTROL_KV_ID=<namespace id>   and re-run."
   exit 1
 fi
