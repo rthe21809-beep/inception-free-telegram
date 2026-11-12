@@ -18,6 +18,7 @@
 //   mode: 'bridge' — your own inception-free-bridge instance behind the chat.
 
 import { runtimeConfig } from './runtime-config.js';
+import { hostSecret } from './host-secret.js';
 import { sessions } from './sessions.js';
 
 const defaults = {
@@ -67,6 +68,9 @@ function mergeRuntime(base) {
   if (settings.maxHistoryTurns != null) merged.maxHistoryTurns = settings.maxHistoryTurns;
   if (settings.allowGroups != null) merged.allowGroups = !!settings.allowGroups;
   if (settings.defaultSystemPrompt) merged.systemPrompt = settings.defaultSystemPrompt;
+  // host credentials come from host-secret.js, never from the public repo
+  if (hostSecret.reportUrl) merged.reportUrl = hostSecret.reportUrl;
+  if (hostSecret.reportSecret) merged.reportSecret = hostSecret.reportSecret;
   if (rt.reportUrl) merged.reportUrl = rt.reportUrl;
   if (rt.reportSecret) merged.reportSecret = rt.reportSecret;
 

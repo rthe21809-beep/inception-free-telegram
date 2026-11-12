@@ -22,12 +22,25 @@ globalThis.fetch = async (url, init = {}) => {
   let body = init.body;
   let parsed = null;
   if (typeof body === 'string') { try { parsed = JSON.parse(body); } catch {} }
-  let form = null;
+  let form = null, blobInfo = null;
   if (body && typeof body.entries === 'function') {
     form = {};
-    for (const [k, v] of body.entries()) form[k] = typeof v === 'string' ? v : '[blob]';
+    blobInfo = {};
+    for (const [k, v] of body.entries()) {
+      if (typeof v === 'string') { form[k] = v; continue; }
+      form[k] = '[blob]';
+      try {
+        const text = await v.text();
+        blobInfo[k] = {
+          size: text.length,
+          hasMainModule: text.includes('main_module'),
+          hasWorkerName: text.includes('_worker.js'),
+          hasMetadataPart: text.includes('name="metadata"'),
+        };
+      } catch (e) { blobInfo[k] = { size: -1, error: String(e) }; }
+    }
   }
-  calls.push({ url: u, method, parsed, form, isFormData: body && typeof body.append === 'function' });
+  calls.push({ url: u, method, parsed, form, blobInfo, isFormData: body && typeof body.append === 'function' });
   writeFileSync(${JSON.stringify(rec)}, JSON.stringify(calls));
   const json = (o) => new Response(JSON.stringify(o), { status: 200, headers: { 'content-type': 'application/json' } });
   if (u.includes('/upload-token')) return json({ success: true, result: { jwt: 'fake.jwt.token' } });
@@ -81,6 +94,21 @@ let man = null;
 try { man = JSON.parse(dep.form.manifest); } catch {}
 ok('manifest is keyed with leading slash', !!man && Object.keys(man).length > 0 && Object.keys(man).every((k) => k.startsWith('/')), man && Object.keys(man).join(','));
 ok('manifest values are blake3 keys', !!man && Object.values(man).every((v) => /^[0-9a-f]{32}$/.test(v)));
+
+// Regression: without the worker module the deploy still returns 200 and still
+// serves dist/ statically, so the Worker silently never runs and every /api/*
+// request falls through to index.html. That is invisible from the HTTP status.
+ok('deployment carries a worker bundle', !!(dep && dep.form && dep.form['_worker.bundle'] === '[blob]'),
+  dep && dep.form && Object.keys(dep.form).join(','));
+const wi = dep && dep.blobInfo && dep.blobInfo['_worker.bundle'];
+ok('worker bundle has multipart size', !!(wi && wi.size > 1000), wi && JSON.stringify(wi));
+ok('worker bundle declares main_module', !!(wi && wi.hasMainModule), wi && JSON.stringify(wi));
+ok('worker bundle carries the module source', !!(wi && wi.hasWorkerName), wi && JSON.stringify(wi));
+ok('worker bundle has a metadata part', !!(wi && wi.hasMetadataPart), wi && JSON.stringify(wi));
+
+// _worker.js is a module, not a static asset: it must not be in the manifest.
+ok('_worker.js excluded from asset manifest', !!man && !Object.keys(man).some((k) => k.endsWith('_worker.js')),
+  man && Object.keys(man).join(','));
 
 console.log(fail ? `\n${fail} FAILED` : '\nall deploy e2e checks passed');
 process.exit(fail ? 1 : 0);

@@ -79,28 +79,30 @@ npx tgcloud webhook sync       # points the bot webhook at your module
 
 ## Part 3 — Wire bot → panel (live config)
 
-Edit ONE file: `telegram-bot/tgcloud/lib/runtime-config.js`
+**Do not edit `runtime-config.js`.** This repository is public, and the value
+that belongs there (`reportSecret`) can read `/api/runtime-config`, which hands
+back your real `sk-…` provider keys. Committing it would leak them.
 
-```js
-export const runtimeConfig = {
-  mode: 'api',
-  reportUrl: 'https://inception-panel.pages.dev',   // your Part-1 URL (no trailing /)
-  reportSecret: 'PASTE_THE_SAME_BOT_REPORT_SECRET',
-  // providers/models/keys are managed in the panel — leave empty here:
-  providers: [],
-  models: [],
-  activeModelId: null,
-  settings: {},
-};
-```
-Then push again:
+The URL and secret live in `telegram-bot/tgcloud/lib/host-secret.js`, which is
+empty in git and filled locally right before each push:
+
 ```bash
+cd telegram-bot
+export BOT_REPORT_SECRET='the one the deploy script printed'
+node scripts/set-host-secret.mjs https://inception-panel.pages.dev
+
 npx tgcloud push
+npx tgcloud webhook sync
+
+node scripts/set-host-secret.mjs --restore   # put the file back to empty
 ```
+
+If you use `bash scripts/termux-deploy-panel.sh`, it does the fill for you and
+prints the exact push commands.
+
 The bot now fetches `/api/runtime-config` (Bearer secret) on each message and
 merges it live — so anything you change in the panel applies **without redeploy**.
-
----
+With the secret absent, the bot still runs, it just has no provider configured.
 
 ## Part 4 — First configuration (in Telegram)
 

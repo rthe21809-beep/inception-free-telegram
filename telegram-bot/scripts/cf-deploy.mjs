@@ -250,9 +250,14 @@ async function main() {
   ok(`CONTROL_KV bound; secrets: ${Object.keys(env_vars).join(', ') || '(none exported)'}`);
 
   console.log('==> 4/5 hashing + uploading assets');
+  // These are NOT static assets: wrangler ignores them during the walk, and
+  // _worker.js in particular must never enter the manifest (it is the worker
+  // module, uploaded separately as _worker.bundle).
+  const IGNORE = new Set(['_worker.js', '_redirects', '_headers', '_routes.json', '.DS_Store']);
   const files = [];
   (function walk(d) {
     for (const n of readdirSync(d)) {
+      if (IGNORE.has(n) || n === 'node_modules' || n === '.git') continue;
       const p = join(d, n);
       if (statSync(p).isDirectory()) walk(p);
       else files.push(p);
@@ -323,8 +328,22 @@ async function main() {
   ok(`${missing.length} asset(s) uploaded, ${assets.size - missing.length} already cached`);
 
   console.log('==> 5/5 creating deployment');
+
+  // The deployment form needs the WORKER MODULE ITSELF, not just the asset
+  // manifest. Wrangler nests a second multipart document under the field
+  // "_worker.bundle": its "metadata" names the main module, and the module
+  // source is a sibling part. Omitting this still returns HTTP 200 and still
+  // serves dist/ statically — but the Worker never runs, so every /api/* route
+  // silently falls through to index.html.
+  const workerSrc = readFileSync(join(DIST, '_worker.js'), 'utf8');
+  const inner = new FormData();
+  inner.set('metadata', JSON.stringify({ main_module: '_worker.js' }));
+  inner.set('_worker.js', new File([workerSrc], '_worker.js', { type: 'application/javascript+module' }));
+  const bundleBlob = await new Response(inner).blob();
+
   const form = new FormData();
   form.set('manifest', JSON.stringify(manifest));
+  form.set('_worker.bundle', new File([bundleBlob], '_worker.bundle'));
   form.set('branch', 'main');
   const dep = await cf(`/accounts/${acct}/pages/projects/${PROJECT}/deployments`, { method: 'POST', body: form });
 
@@ -364,7 +383,9 @@ async function main() {
     console.log('       node /sdcard/Download/DSHA/dfix.mjs');
     console.log('     It deploys 4 isolated projects and prints which layer breaks.');
   }
-  console.log('\nUse the canonical URL as reportUrl in tgcloud/lib/runtime-config.js\n');
+  console.log('\nPanel URL: ' + stable);
+  console.log('The bot reads this URL + BOT_REPORT_SECRET from tgcloud/lib/host-secret.js,');
+  console.log('which is filled locally and never committed.\n');
 }
 
 main().catch((e) => { console.error('\nFAILED: ' + e.message + '\n'); process.exit(1); });

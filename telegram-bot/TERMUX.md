@@ -49,19 +49,20 @@ cd ~/inception-free-telegram/telegram-bot
 npx tgcloud login          # paste your tgcloud token (app…:secret)
 ```
 
-## 4. Point the bot at your panel (the ONLY file you edit)
+## 4. Point the bot at your panel
+
+Nothing to hand-edit. `scripts/termux-deploy-panel.sh` writes the panel URL and
+secret into `tgcloud/lib/host-secret.js` for you — that file is empty in git
+because **this repo is public** and the value it would hold can read your real
+provider API keys. If you deployed the panel some other way:
+
 ```bash
-nano ~/inception-free-telegram/telegram-bot/tgcloud/lib/runtime-config.js
-```
-Set exactly two lines (everything else stays empty — keys/models go in the panel):
-```js
-  reportUrl: 'https://inception-panel.pages.dev',   // your URL from step 2
-  reportSecret: 'PASTE_BOT_REPORT_SECRET',          // the secret from step 2
-```
-Save (Ctrl-O, Enter, Ctrl-X), then:
-```bash
+cd ~/inception-free-telegram/telegram-bot
+export BOT_REPORT_SECRET='the secret the deploy printed'
+node scripts/set-host-secret.mjs https://inception-panel.pages.dev
 npx tgcloud push
 npx tgcloud webhook sync
+node scripts/set-host-secret.mjs --restore
 ```
 
 ## 5. Configure the bot in Telegram

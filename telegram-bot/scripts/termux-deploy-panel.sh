@@ -94,15 +94,32 @@ fi
 export BOT_TOKEN BOT_REPORT_SECRET
 
 echo "==> 4/4 Deploying via Cloudflare REST API"
-echo "   >>> COPY THE BOT_REPORT_SECRET BELOW NOW — you must paste it into"
-echo "   >>> tgcloud/lib/runtime-config.js (reportSecret), or the bot can't talk to the panel."
 echo "   BOT_REPORT_SECRET = $BOT_REPORT_SECRET"
 echo
-node "$HERE/cf-deploy.mjs"
+set -o pipefail
+node "$HERE/cf-deploy.mjs" | tee /tmp/cf-deploy.log
+set +o pipefail
+PORTAL=$(grep -oE 'https://[a-z0-9-]+\.pages\.dev' /tmp/cf-deploy.log | tail -1)
 
 echo
-echo "DONE."
-echo "1) Use the https://<project>.pages.dev URL above as reportUrl in"
-echo "   tgcloud/lib/runtime-config.js, together with the BOT_REPORT_SECRET above"
-echo "   as reportSecret  (Part 3 of DEPLOY.md)."
-echo "2) Then:  npx tgcloud push  &&  npx tgcloud webhook sync"
+if [ -z "$PORTAL" ]; then
+  echo "!! Could not detect the panel URL in the deploy output."
+  echo "   Set it yourself, then push the bot:"
+  echo "     node scripts/set-host-secret.mjs https://<project>.pages.dev"
+  echo "     npx tgcloud push && npx tgcloud webhook sync"
+  exit 1
+fi
+
+echo "==> Writing host credentials for the bot (kept out of git)"
+BOT_REPORT_SECRET="$BOT_REPORT_SECRET" node "$HERE/set-host-secret.mjs" "$PORTAL"
+
+echo
+echo "DONE — panel is at $PORTAL"
+echo "Next, push the bot so it picks up the panel URL + secret:"
+echo "  npx tgcloud login          # only the first time"
+echo "  npx tgcloud push"
+echo "  npx tgcloud webhook sync"
+echo
+echo "After pushing, run this to wipe the secret from the working tree:"
+echo "  node scripts/set-host-secret.mjs --restore"
+echo "Then open the panel in Telegram and add your Inception API key."
