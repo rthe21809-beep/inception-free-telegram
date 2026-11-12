@@ -24,6 +24,11 @@ const OUTPUT = arg('output', 'creds.json');
 const HEADLESS = !args.includes('--headed');
 const TIMEOUT_MS = parseInt(arg('timeout-ms', '120000'), 10);
 const LOOP_HOURS = parseFloat(arg('loop-hours', '0')); // 0 = single run; >0 = loop forever
+// Optional proxy for the checkpoint-solving browser. Set via --proxy or the
+// WARMUP_PROXY env var (e.g. "http://user:pass@host:port"). When running in
+// a datacenter (Render/Railway), a residential/mobile proxy is what lets the
+// Vercel checkpoint pass.
+const PROXY = arg('proxy', '') || process.env.WARMUP_PROXY || '';
 // On Android/Termux: point at the native chromium (pkg install chromium).
 // Auto-detect Termux chromium if no explicit path is given.
 function detectChromium() {
@@ -66,7 +71,7 @@ async function solve() {
         'If the binary has a different name (e.g. chromium-browser), pass: --chromium "$PREFIX/bin/chromium-browser"'
       );
     }
-    const res = await solveWithCdp({ chromiumPath: CHROMIUM_PATH, timeoutMs: TIMEOUT_MS, headless: HEADLESS });
+    const res = await solveWithCdp({ chromiumPath: CHROMIUM_PATH, timeoutMs: TIMEOUT_MS, headless: HEADLESS, proxy: PROXY });
     return { ...res, bearer: extractBearer(res.cookies, res.localStorage) };
   }
 
@@ -78,6 +83,7 @@ async function solve() {
       executablePath: CHROMIUM_PATH || undefined,
       chromiumSandbox: false,
       args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--disable-setuid-sandbox'],
+      proxy: PROXY ? { server: PROXY } : undefined,
     });
     try {
       const ctx = await browser.newContext({
@@ -87,6 +93,27 @@ async function solve() {
         timezoneId: 'America/Los_Angeles',
       });
       const page = await ctx.newPage();
+
+      // Capture auth material from network traffic: Authorization headers on
+      // requests/responses, and JWT-shaped tokens inside JSON API responses.
+      const netAuth = { bearer: '' };
+      page.on('request', req => {
+        const h = req.headers()['authorization'] || '';
+        if (h.startsWith('Bearer ')) netAuth.bearer = h.slice(7);
+      });
+      page.on('response', async res => {
+        try {
+          const h = res.headers()['authorization'] || '';
+          if (h.startsWith('Bearer ')) netAuth.bearer = h.slice(7);
+          const ct = res.headers()['content-type'] || '';
+          if (/api|auth|token|session|chat|login/i.test(res.url()) && ct.includes('json')) {
+            const body = await res.text().catch(() => '');
+            const m = body.match(/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{6,}/);
+            if (m) netAuth.bearer = netAuth.bearer || m[0];
+          }
+        } catch {}
+      });
+
       await page.goto(TARGET, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
       const deadline = Date.now() + TIMEOUT_MS;
@@ -94,25 +121,40 @@ async function solve() {
       while (Date.now() < deadline) {
         title = await page.title().catch(() => '');
         if (title && !title.includes(CHECKPOINT_TITLE) && title !== '') break;
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(2500);
       }
 
-      const cookiesArr = await ctx.cookies();
+      // Poll for cookies up to 45s (the app sets its session cookies during
+      // bootstrap, not at first paint). Reload once if nothing appears.
       const cookies = {};
-      for (const c of cookiesArr) cookies[c.name] = c.value;
+      const start = Date.now();
+      let reloaded = false;
+      while (Date.now() - start < 45000 && Date.now() < deadline) {
+        const arr = await ctx.cookies().catch(() => []);
+        for (const c of arr) cookies[c.name] = c.value;
+        if (Object.keys(cookies).some(k => k.startsWith('vc_')) || Object.keys(cookies).length >= 2) break;
+        if (!reloaded && Date.now() - start > 15000) {
+          reloaded = true;
+          await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+        }
+        await page.waitForTimeout(1500);
+      }
+      const finalArr = await ctx.cookies().catch(() => []);
+      for (const c of finalArr) cookies[c.name] = c.value;
 
-      const localStorageData = await page.evaluate(() => {
-        const out = {};
-        try {
-          for (let i = 0; i < localStorage.length; i++) {
-            const k = localStorage.key(i);
-            out[k] = localStorage.getItem(k);
-          }
-        } catch {}
-        return out;
-      }).catch(() => ({}));
+      const storageData = await page.evaluate(() => {
+        const dump = s => {
+          const o = {};
+          try { for (let i = 0; i < s.length; i++) { const k = s.key(i); o[k] = s.getItem(k); } } catch {}
+          return o;
+        };
+        return { ls: dump(localStorage), ss: dump(sessionStorage) };
+      }).catch(() => ({ ls: {}, ss: {} }));
 
-      return { cookies, localStorage: localStorageData, bearer: extractBearer(cookies, localStorageData), title: title || '(unknown)' };
+      const ls = storageData.ls || {};
+      const ss = storageData.ss || {};
+      const bearer = netAuth.bearer || extractBearer(cookies, { ...ls, ...ss });
+      return { cookies, localStorage: ls, sessionStorage: ss, bearer, title: title || '(unknown)' };
     } finally {
       await browser.close().catch(() => {});
     }
@@ -122,7 +164,7 @@ async function solve() {
     if (!CHROMIUM_PATH) {
       throw new Error('no chromium path (use --chromium <path>, or install a browser: npx playwright install chromium)');
     }
-    const res = await solveWithCdp({ chromiumPath: CHROMIUM_PATH, timeoutMs: TIMEOUT_MS, headless: HEADLESS });
+    const res = await solveWithCdp({ chromiumPath: CHROMIUM_PATH, timeoutMs: TIMEOUT_MS, headless: HEADLESS, proxy: PROXY });
     return { ...res, bearer: extractBearer(res.cookies, res.localStorage) };
   }
 }

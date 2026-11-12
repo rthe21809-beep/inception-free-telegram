@@ -18,9 +18,14 @@ import { composeReply, helpText } from './format.js';
 import { config as defaultConfig } from './config.js';
 
 async function defaultAskBridge(messages, cfg) {
+  if (cfg.mode === 'api') {
+    // multi-provider OpenAI-compatible API — no checkpoint, no sessions
+    const { askProvider } = await import('./providers.js');
+    return askProvider(messages, cfg);
+  }
   if (cfg.mode === 'direct') {
-    // zero-server mode: talk straight to chat.inceptionlabs.ai from the
-    // Telegram sandbox, using embedded sessions
+    // zero-server web-chat mode: talk straight to chat.inceptionlabs.ai from
+    // the Telegram sandbox, using embedded sessions
     const { askInceptionDirect } = await import('./tgupstream.js');
     return askInceptionDirect(messages, cfg);
   }
@@ -49,7 +54,13 @@ export async function handleMessage(message, deps) {
       return;
     }
     if (cmd === '/model') {
-      await api.sendMessage({ chat_id: chatId, text: `Model: ${cfg.model}` });
+      const { activeModel } = await import('./providers.js');
+      const m = activeModel(cfg);
+      await api.sendMessage({ chat_id: chatId, text: m ? `Model: ${m.label} (${m.providerId})` : `Model: ${cfg.model} (no providers configured)` });
+      return;
+    }
+    if (cmd === '/admin') {
+      await handleAdminCommand(api, chatId, message, cfg);
       return;
     }
     await api.sendMessage({ chat_id: chatId, text: 'Unknown command. Try /help.' });
@@ -77,18 +88,25 @@ export async function handleMessage(message, deps) {
   // --- engine call (with optional self-healing via the cloud collector) ---
   const askBridge = deps.askBridge || defaultAskBridge;
   const tryAsk = () => askBridge(messages, cfg);
+  let result; // { answer, usage? } from the attempt
   let answer;
   let failed = false;
 
   const attempt = async (firstTry) => {
     try {
       const r = await tryAsk();
-      return { answer: composeReply({ reasoning: r.reasoning, content: r.content }) };
+      return {
+        answer: composeReply({ reasoning: r.reasoning, content: r.content }),
+        usage: {
+          tokensIn: r.tokensIn || 0,
+          tokensOut: r.tokensOut || 0,
+          provider: r.provider || '',
+          keyId: r.keyId || '',
+        },
+      };
     } catch (err) {
       const refreshable = ['NO_SESSIONS', 'SESSIONS_EXHAUSTED', 'CHALLENGE'].includes(err?.code);
       if (refreshable && cfg.collectorUrl && firstTry) {
-        // sessions expired or challenged -> ask the cloud collector to refresh
-        // fresh sessions and redeploy, then retry once
         try {
           if (deps.collectorRefresh) await deps.collectorRefresh(cfg.collectorUrl);
           else {
@@ -102,6 +120,15 @@ export async function handleMessage(message, deps) {
         }
       }
       console.error('[engine] bridge failed:', String(err?.message || err).slice(0, 200));
+      if (err?.code === 'NO_API_KEY' || err?.code === 'NO_PROVIDER' || err?.code === 'NO_MODEL') {
+        return { answer: '⚠️ No usable model is configured for this bot.\nUse the admin panel (or contact the owner) to add a provider + API key, then enable a model.' };
+      }
+      if (err?.code === 'API_AUTH') {
+        return { answer: '⚠️ The active provider rejected the API key (401).\nUpdate the key in the admin panel.' };
+      }
+      if (err?.code === 'API_TIMEOUT' || err?.code === 'API_NETWORK') {
+        return { answer: '⚠️ The model provider timed out or was unreachable. Please try again in a moment.' };
+      }
       if (err?.code === 'NO_SESSIONS') {
         return { answer: '⚠️ The engine has no sessions configured, and the session collector is not reachable.\nCheck the collector service, or run `node tools/update-sessions.mjs` and redeploy.' };
       }
@@ -112,9 +139,9 @@ export async function handleMessage(message, deps) {
     }
   };
 
-  const first = await attempt(true);
-  answer = first.answer;
-  failed = !first.answer || first.answer.startsWith('⚠️');
+  result = await attempt(true);
+  answer = result.answer;
+  failed = !result.answer || result.answer.startsWith('⚠️');
 
   // --- memory write (store the user message always, the answer only when it
   //     is a real engine reply) ---
@@ -131,4 +158,55 @@ export async function handleMessage(message, deps) {
   }
 
   await api.sendMessage({ chat_id: chatId, text: answer });
+
+  // --- report usage/chat event to the control plane (fire-and-forget) ---
+  if (deps.report) {
+    try {
+      await deps.report({
+        uid: message.from?.id,
+        username: message.from?.username || '',
+        firstName: message.from?.first_name || '',
+        provider: result.usage?.provider || '',
+        keyId: result.usage?.keyId || '',
+        model: cfg.activeModelId || cfg.model,
+        tokensIn: result.usage?.tokensIn || 0,
+        tokensOut: result.usage?.tokensOut || 0,
+        charIn: text.length,
+        charOut: failed ? 0 : answer.length,
+        status: failed ? 'error' : 'ok',
+        preview: failed ? '' : answer.slice(0, 160),
+      });
+    } catch { /* reporting is best-effort */ }
+  }
+}
+
+// Owner/admin command. The Mini App needs to run inside Telegram, so we send
+// an inline keyboard with a WebApp button pointing at the control plane. A
+// plain fallback reply is used when no panel URL is configured.
+async function handleAdminCommand(api, chatId, message, cfg) {
+  const uid = message.from?.id;
+  const panelUrl = String(cfg.reportUrl || '').replace(/\/+$/, '') + '/panel';
+  const isOwner = uid === 6940999328;
+  // Admins are defined on the control plane; here we optimistically allow the
+  // owner. Fine-grained gating happens server-side on /api/*.
+  if (!isOwner) {
+    await api.sendMessage({ chat_id: chatId, text: '⚠️ This command is for the owner only.' });
+    return;
+  }
+  if (!panelUrl || panelUrl === '/panel') {
+    await api.sendMessage({ chat_id: chatId, text: 'Admin panel is not configured (no control-plane URL).' });
+    return;
+  }
+  await api.sendMessage({
+    chat_id: chatId,
+    text: 'Open the admin panel:',
+    reply_markup: {
+      inline_keyboard: [[
+        {
+          text: '🛠 Open Admin Panel',
+          web_app: { url: panelUrl },
+        },
+      ]],
+    },
+  });
 }

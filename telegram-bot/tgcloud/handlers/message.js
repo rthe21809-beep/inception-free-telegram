@@ -7,6 +7,7 @@
 
 import { api, db } from 'sdk';
 import { handleMessage } from '../lib/engine.js';
+import { createReport } from '../lib/report.js';
 import { history } from '../schema.js';
 import { eq, desc } from 'sdk/db';
 
@@ -24,8 +25,13 @@ async function saveTurn(chatId, role, content) {
 }
 
 export default async function (message) {
+  const { config } = await import('../lib/config.js');
+  const report = createReport({
+    reportUrl: config.reportUrl,
+    reportSecret: config.reportSecret,
+  });
   try {
-    await handleMessage(message, { api, db, getHistory, saveTurn });
+    await handleMessage(message, { api, db, getHistory, saveTurn, report });
   } catch (err) {
     console.error('[message] unhandled error:', String(err?.stack || err).slice(0, 400));
     try {

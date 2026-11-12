@@ -115,6 +115,37 @@ try {
     check(d.memory.some(m => m.role === 'assistant' && m.content.includes('Fresh answer.')), 'assistant turn saved after success');
   }
 
+  // ---- API mode: official Inception API path ----
+  {
+    const d = makeDeps({
+      config: { mode: 'api', inceptionApiKey: 'sk-test' },
+      askBridge: async (messages, cfg) => {
+        check(cfg.mode === 'api', 'api mode selected');
+        check(cfg.inceptionApiKey === 'sk-test', 'api key forwarded');
+        check(messages.at(-1).content === 'hello api', 'message forwarded to api');
+        return { content: 'API reply.', reasoning: 'api reasoning.' };
+      },
+    });
+    await handleMessage(msg('hello api'), d);
+    const reply = d.calls.sendMessage.at(-1).text;
+    check(reply.includes('API reply.'), 'api mode returns the model answer');
+    check(reply.includes('api reasoning.'), 'api mode includes reasoning preview');
+  }
+
+  // ---- API auth failure -> clear guidance ----
+  {
+    const d = makeDeps({
+      config: { mode: 'api', inceptionApiKey: 'sk-bad' },
+      askBridge: async () => {
+        const err = new Error('inception api HTTP 401: unauthorized');
+        err.code = 'API_AUTH';
+        throw err;
+      },
+    });
+    await handleMessage(msg('hi'), d);
+    check(d.calls.sendMessage.at(-1).text.includes('401'), 'api auth failure explains the 401');
+  }
+
   // ---- collector refresh fails -> friendly error, no assistant memory ----
   {
     const d = makeDeps({

@@ -28,3 +28,8 @@ services:
         value: "6"
       - key: SESSION_COUNT
         value: "3"
+      # Optional: one proxy per line (residential/mobile recommended) so the
+      # Vercel checkpoint sees a home IP instead of a datacenter one.
+      # The collector rotates through these, one per warmup attempt.
+      # - key: PROXY_LIST
+      #   value: "http://user:pass@host1:port\nhttp://user:pass@host2:port"
