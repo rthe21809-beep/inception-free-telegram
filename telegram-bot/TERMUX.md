@@ -27,8 +27,9 @@ cd ~/inception-free-telegram/telegram-bot
 
 ## 2. Deploy the panel to Cloudflare (from Termux)
 You need a **Cloudflare API token** (create at dash.cloudflare.com → My
-Profile → API Tokens → "Edit Cloudflare Workers" template), and a **KV
-namespace** (**Storage → KV → Namespaces → Create**, name it `CONTROL_KV`).
+Profile → API Tokens → custom token with **Account → Cloudflare Pages → Edit**
+and **Account → Workers KV Storage → Edit**), and a **KV namespace**
+(**Storage → KV → Namespaces → Create**, name it `CONTROL_KV`).
 
 ```bash
 cd ~/inception-free-telegram/telegram-bot
@@ -36,9 +37,11 @@ export CLOUDFLARE_API_TOKEN=your_cloudflare_api_token
 export CONTROL_KV_ID=your_kv_namespace_id
 bash scripts/termux-deploy-panel.sh
 ```
-The script installs wrangler, builds the React panel, sets the two secrets
-(BOT_TOKEN, BOT_REPORT_SECRET — it will prompt you), and deploys.
-It prints your panel URL, e.g. `https://inception-panel.pages.dev`.
+The script builds the React panel, sets the two secrets (BOT_TOKEN,
+BOT_REPORT_SECRET — it prompts you and can generate the secret for you), and
+deploys via the Cloudflare REST API. It prints your panel URL, e.g.
+`https://inception-panel.pages.dev`, **and the BOT_REPORT_SECRET to copy into
+step 4**. `wrangler` is not used at all — it cannot run on Android.
 
 ## 3. Deploy the bot to Telegram Serverless
 ```bash
@@ -100,6 +103,13 @@ git fetch origin && git reset --hard origin/main
 
 ### `bash: scripts/termux-deploy-panel.sh: No such file or directory`
 You are on a pre-v8 commit; run the `git fetch && git reset --hard` above.
+
+### `Error: Unsupported platform: android arm64 LE`
+That is `wrangler`. It bundles `workerd`, a native binary Cloudflare builds only
+for desktop OSes — there is no Android version, so wrangler can **never** run in
+Termux. You do not need it: `scripts/termux-deploy-panel.sh` uses
+`scripts/cf-deploy.mjs`, which calls the Cloudflare REST API directly. Just make
+sure you are on the latest commit (`git fetch && git reset --hard origin/main`).
 
 ---
 ## What only YOU can do (I can't, I don't have your accounts/secrets)

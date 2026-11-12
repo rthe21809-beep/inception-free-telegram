@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # Deploy the admin panel + API to Cloudflare Pages from Termux.
-# Run AFTER you cloned the repo. Needs: node, and a Cloudflare API token.
+#
+# Uses the Cloudflare REST API directly (scripts/cf-deploy.mjs) — NO wrangler,
+# because wrangler ships the precompiled "workerd" binary which has no Android
+# arm64 build and can never run in Termux.
 #
 #   cd <repo>/telegram-bot
 #   bash scripts/termux-deploy-panel.sh
 #
 set -euo pipefail
 
-PANEL_DIR="$(cd "$(dirname "$0")/../admin-panel" && pwd)"
-PROJECT=inception-panel
+HERE="$(cd "$(dirname "$0")" && pwd)"
+PANEL_DIR="$(cd "$HERE/../admin-panel" && pwd)"
 
 # ---- preflight: node must actually run (Termux ICU breakage is common) ----
-echo "==> 0/5 Checking node"
+echo "==> 0/4 Checking node"
 if ! command -v node >/dev/null 2>&1; then
   echo "ERROR: node is not installed."
   echo "Fix:  pkg install -y nodejs"
@@ -29,45 +32,70 @@ if ! NODE_V="$(node -v 2>&1)"; then
   exit 1
 fi
 echo "    node $NODE_V"
-if ! command -v npm >/dev/null 2>&1; then
-  echo "ERROR: npm missing. Fix: pkg reinstall -y nodejs"
-  exit 1
-fi
 
 cd "$PANEL_DIR"
 
-echo "==> 1/5 Installing wrangler + building panel"
+echo "==> 1/4 Installing deps + building panel"
 npm install
 npm run build
 
 echo
-echo "==> 2/5 Cloudflare API token"
+echo "==> 2/4 Cloudflare credentials"
 if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
-  echo "Create one at: https://dash.cloudflare.com/profile/api-tokens"
-  echo "Custom token with: Account -> Cloudflare Pages -> Edit"
-  echo "                   Account -> Workers KV Storage -> Edit"
-  echo "Then run:  export CLOUDFLARE_API_TOKEN=xxxxxxxx"
-  echo "and re-run this script."
+  cat <<'EOT'
+CLOUDFLARE_API_TOKEN is not set. Create one:
+  1. open https://dash.cloudflare.com/profile/api-tokens
+  2. "Create Token" -> "Create Custom Token"
+  3. Permissions:  Account -> Cloudflare Pages -> Edit
+                   Account -> Workers KV Storage -> Edit
+  4. Account Resources: your account
+  5. Create, copy the token, then:
+        export CLOUDFLARE_API_TOKEN=xxxxxxxxxxxxxxxx
+EOT
+  exit 1
+fi
+if [ -z "${CONTROL_KV_ID:-}" ]; then
+  cat <<'EOT'
+CONTROL_KV_ID is not set. Create the namespace:
+  1. open https://dash.cloudflare.com
+  2. left sidebar -> Storage -> KV -> Namespaces -> "Create a namespace"
+  3. name it CONTROL_KV
+  4. copy the 32-hex "Namespace ID", then:
+        export CONTROL_KV_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+EOT
   exit 1
 fi
 
-echo "==> 3/5 KV namespace id"
-KVID="${CONTROL_KV_ID:-}"
-if [ -z "$KVID" ]; then
-  echo "Create namespace: dash.cloudflare.com -> Storage -> KV -> Namespaces -> Create"
-  echo "Then:  export CONTROL_KV_ID=<namespace id>   and re-run."
-  exit 1
+echo "==> 3/4 Secrets (paste when asked; input is hidden)"
+if [ -z "${BOT_TOKEN:-}" ]; then
+  printf 'BOT_TOKEN (from @BotFather /mybots -> API Token): '
+  read -rs BOT_TOKEN; echo
 fi
-sed -i "s/REPLACE_WITH_KV_NAMESPACE_ID/$KVID/g; s/REPLACE_WITH_PREVIEW_KV_NAMESPACE_ID/$KVID/g" wrangler.toml
+if [ -z "${BOT_REPORT_SECRET:-}" ]; then
+  SUGGESTED="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
+  echo "BOT_REPORT_SECRET — press Enter to use a fresh random one:"
+  echo "   $SUGGESTED"
+  printf 'BOT_REPORT_SECRET: '
+  read -rs _INPUT; echo
+  if [ -z "$_INPUT" ]; then
+    BOT_REPORT_SECRET="$SUGGESTED"
+    echo "   using the generated value above."
+  else
+    BOT_REPORT_SECRET="$_INPUT"
+  fi
+fi
+export BOT_TOKEN BOT_REPORT_SECRET
 
-echo "==> 4/5 Setting secrets (you will be prompted twice)"
-echo "   BOT_TOKEN         = your real Telegram bot token from @BotFather"
-echo "   BOT_REPORT_SECRET = run: openssl rand -hex 32   (SAVE IT for Part 3)"
-npx wrangler pages secret put BOT_TOKEN --project-name "$PROJECT"
-npx wrangler pages secret put BOT_REPORT_SECRET --project-name "$PROJECT"
-
-echo "==> 5/5 Deploying"
-npx wrangler pages deploy dist --project-name "$PROJECT"
+echo "==> 4/4 Deploying via Cloudflare REST API"
+echo "   >>> COPY THE BOT_REPORT_SECRET BELOW NOW — you must paste it into"
+echo "   >>> tgcloud/lib/runtime-config.js (reportSecret), or the bot can't talk to the panel."
+echo "   BOT_REPORT_SECRET = $BOT_REPORT_SECRET"
 echo
-echo "DONE. Your panel URL is shown above (https://$PROJECT.pages.dev)."
-echo "Use it as reportUrl in tgcloud/lib/runtime-config.js (Part 3 of DEPLOY.md)."
+node "$HERE/cf-deploy.mjs"
+
+echo
+echo "DONE."
+echo "1) Use the https://<project>.pages.dev URL above as reportUrl in"
+echo "   tgcloud/lib/runtime-config.js, together with the BOT_REPORT_SECRET above"
+echo "   as reportSecret  (Part 3 of DEPLOY.md)."
+echo "2) Then:  npx tgcloud push  &&  npx tgcloud webhook sync"

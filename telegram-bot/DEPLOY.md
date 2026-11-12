@@ -12,47 +12,52 @@ Inception `sk-…` API key (added later inside the panel, not here).
 
 ## Part 1 — Cloudflare panel + API (≈10 min)
 
-### 1. Install wrangler and log in
+### 1. One-shot deploy (recommended)
+The deploy script does steps 2-4 for you using the Cloudflare **REST API**
+directly. Wrangler is deliberately **not** used: it ships the precompiled
+`workerd` binary, which has no Android/arm64 build and cannot run in Termux.
+
 ```bash
-npm install -g wrangler        # or: npx wrangler ...
-wrangler login                  # opens browser, authorize Cloudflare
+cd <repo>/telegram-bot
+export CLOUDFLARE_API_TOKEN=...        # see CREDENTIALS.md item 3
+export CONTROL_KV_ID=...               # see CREDENTIALS.md item 4
+bash scripts/termux-deploy-panel.sh    # prompts for the two secrets
 ```
 
-### 2. Create the KV namespace (stores providers/keys/models/users/logs)
-Dashboard: **Storage → KV → Namespaces → Create namespace**, name it `CONTROL_KV` (older accounts: Workers & Pages → KV).
-Copy the **Namespace ID**.
-(Optional) create a second one named `CONTROL_KV_PREVIEW` for `wrangler pages dev`.
+It prints your `BOT_REPORT_SECRET` — copy it, the bot needs the same value.
 
-Paste the IDs into `admin-panel/wrangler.toml`:
+### 2. Create the KV namespace (stores providers/keys/models/users/logs)
+Dashboard: **Storage → KV → Namespaces → Create namespace**, name it `CONTROL_KV`
+(older accounts: Workers & Pages → KV). Copy the **Namespace ID**.
+
+The script writes it into `admin-panel/wrangler.toml` and binds it on the
+project via the API. If you ever set it by hand:
 ```toml
 [[kv_namespaces]]
 binding = "CONTROL_KV"
 id = "<paste namespace id here>"
-preview_id = "<paste preview id here, or same id>"
+preview_id = "<same id>"
 ```
 
-### 3. Set the secrets (never commit these)
+### 3. Secrets (never commit these)
+The script sets both as Pages **secret_text** env vars. To change them later:
 ```bash
-cd telegram-bot/admin-panel
-wrangler pages secret put BOT_TOKEN --project-name inception-panel
-# paste your REAL bot token:  123456789:AA....
-
-wrangler pages secret put BOT_REPORT_SECRET --project-name inception-panel
-# paste a long random string, e.g. output of:  openssl rand -hex 32
-# SAVE THIS — the bot needs the same value (Part 3, step 2).
+cd <repo>/telegram-bot
+BOT_TOKEN=123456:AA... BOT_REPORT_SECRET=$(openssl rand -hex 32) node scripts/cf-deploy.mjs
 ```
+`BOT_TOKEN` is your real bot token from @BotFather. `BOT_REPORT_SECRET` is any
+long random string — the bot must be given the **same** value (Part 3, step 2).
 
-### 4. Build the React/TypeScript panel and deploy
+### 4. Manual deploy (no script)
 ```bash
-cd telegram-bot/admin-panel
-npm install
-npm run build                 # outputs dist/ (index.html + assets/)
-npx wrangler pages deploy dist --project-name inception-panel
+cd <repo>/telegram-bot/admin-panel && npm install && npm run build
+cd ..
+node scripts/cf-deploy.mjs          # uses env vars above
+node scripts/cf-deploy.mjs --dry-run   # build + hash only, no network
 ```
 Output gives you a URL like `https://inception-panel.pages.dev`.
-Your panel is live at that root URL (e.g. `https://inception-panel.pages.dev/`).
-Opening it in a plain browser shows "Access denied" — it only works inside
-Telegram (verified via initData HMAC).
+Your panel is live at that root URL. Opening it in a plain browser shows
+"Access denied" — it only works inside Telegram (verified via initData HMAC).
 
 ### 5. (Optional) custom domain
 Dashboard → your Pages project → **Custom domains** → add e.g.
@@ -133,7 +138,22 @@ merges it live — so anything you change in the panel applies **without redeplo
 ## Local testing
 ```bash
 cd telegram-bot
-npm test          # 8 suites: engine, providers, control, live-config, admin-cmd, worker…
-# serve the worker logic locally against a mock KV:
-npx wrangler pages dev admin-panel/dist --kv CONTROL_KV --var BOT_TOKEN:123:abc --var BOT_REPORT_SECRET:sek
+npm test                       # 8 suites: engine, providers, control, live-config, admin-cmd, worker…
+node scripts/cf-deploy.mjs --dry-run   # bundle the API into dist/_worker.js, no network
 ```
+The bundled worker can be exercised directly in Node (no wrangler needed):
+```js
+import worker from './admin-panel/dist/_worker.js';
+const env = { ASSETS: { fetch: () => new Response('static') },
+              BOT_TOKEN: '123:abc', BOT_REPORT_SECRET: 'sek',
+              CONTROL_KV: { async get(){return null}, async put(){}, async delete(){} } };
+await worker.fetch(new Request('https://x.dev/api/runtime-config',
+  { headers: { Authorization: 'Bearer sek' } }), env, { waitUntil(){}, passThroughOnException(){} });
+```
+
+## Why not wrangler?
+`wrangler` depends on `workerd`, a precompiled native binary that Cloudflare
+ships **only for linux/macOS/Windows x64+arm64** — there is no Android build, so
+it fails in Termux with `Error: Unsupported platform: android arm64 LE`.
+`scripts/cf-deploy.mjs` therefore talks to the Cloudflare REST API directly and
+uses `esbuild` (JS, no native deps) to bundle the Pages Function.

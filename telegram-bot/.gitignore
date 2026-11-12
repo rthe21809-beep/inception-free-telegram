@@ -4,3 +4,4 @@ node_modules/
 admin-panel/node_modules/
 admin-panel/dist/
 data/control.json
+admin-panel/dist/_worker.js
