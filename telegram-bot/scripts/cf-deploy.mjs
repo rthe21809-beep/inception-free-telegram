@@ -37,6 +37,29 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const REPORT_SECRET = process.env.BOT_REPORT_SECRET;
 
 const die = (m) => { console.error('\nERROR: ' + m + '\n'); process.exit(1); };
+
+// Content-type for the Pages asset upload. Must be present for every asset or
+// the API stores it as octet-stream and the browser refuses to execute it.
+function mimeFor(ext) {
+  switch (String(ext || '').toLowerCase()) {
+    case '.html': return 'text/html; charset=utf-8';
+    case '.js':
+    case '.mjs': return 'application/javascript; charset=utf-8';
+    case '.css': return 'text/css; charset=utf-8';
+    case '.json': return 'application/json; charset=utf-8';
+    case '.svg': return 'image/svg+xml';
+    case '.png': return 'image/png';
+    case '.jpg':
+    case '.jpeg': return 'image/jpeg';
+    case '.webp': return 'image/webp';
+    case '.ico': return 'image/x-icon';
+    case '.woff': return 'font/woff';
+    case '.woff2': return 'font/woff2';
+    case '.txt': return 'text/plain; charset=utf-8';
+    case '.map': return 'application/json; charset=utf-8';
+    default: return 'application/octet-stream';
+  }
+}
 const ok = (m) => console.log('    ' + m);
 
 // ---------- 0. build the worker bundle ----------
