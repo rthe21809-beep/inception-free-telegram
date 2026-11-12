@@ -255,11 +255,11 @@ server.listen(PORT, '0.0.0.0', async () => {
   console.log(`[collector] bot mode: ${apiMode ? 'api' : botMode()}`);
 
   // --- control plane (admin panel + reporting) ---
-  const { ControlState } = await import('./lib/control-state.mjs').catch(() => ({ ControlState: null }));
+  const { loadControlStateFile } = await import('./lib/control-store-node.mjs').catch(() => ({ loadControlStateFile: null }));
   const { createControlApi } = await import('./lib/control-api.mjs').catch(() => ({ createControlApi: null }));
-  const state = new ControlState({
-    file: process.env.CONTROL_STATE_FILE || path.join(APP_DIR, 'data', 'control.json'),
-  });
+  const state = loadControlStateFile(
+    process.env.CONTROL_STATE_FILE || path.join(APP_DIR, 'data', 'control.json'),
+  );
   const tgCloudPush = async () => {
     try {
       await run('npx', ['tgcloud', 'push'], { cwd: BOT_DIR, timeoutMs: 120000 });

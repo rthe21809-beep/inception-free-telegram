@@ -76,7 +76,7 @@ export async function handleMessage(message, deps) {
           text: '🛠 <b>Admin</b>\n\nUse /admin &lt;command&gt; (see /admin help) or open the web panel:',
           parse_mode: 'HTML',
           reply_markup: (cfg.reportUrl && cfg.reportSecret) ? {
-            inline_keyboard: [[{ text: '🌐 Open Admin Panel', web_app: { url: String(cfg.reportUrl).replace(/\/+$/, '') + '/panel' } }]],
+            inline_keyboard: [[{ text: '🌐 Open Admin Panel', web_app: { url: String(cfg.reportUrl).replace(/\/+$/, '') + '/' } }]],
           } : undefined,
         });
         await handleAdminCommand(api, chatId, message, cfg, '/admin help');

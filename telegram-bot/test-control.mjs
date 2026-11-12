@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ControlState } from './collector/lib/control-state.mjs';
+import { loadControlStateFile } from './collector/lib/control-store-node.mjs';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'control-test-'));
 const file = path.join(dir, 'control.json');
@@ -12,7 +12,7 @@ const file = path.join(dir, 'control.json');
 let failures = 0;
 const check = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${msg}`); if (!cond) failures++; };
 
-const state = new ControlState({ file });
+const state = loadControlStateFile(file);
 
 // owner/admin
 check(state.isOwner(6940999328), 'owner recognized');
@@ -74,7 +74,7 @@ check(keys[0].value.startsWith('sk-…'), 'sanitized keys masked');
 
 // persistence
 state.save();
-const state2 = new ControlState({ file });
+const state2 = loadControlStateFile(file);
 check(state2.state.providers.length === 1, 'state persisted & reloaded');
 check(state2.state.users[42].messages === 2, 'users persisted');
 

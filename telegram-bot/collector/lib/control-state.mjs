@@ -22,8 +22,10 @@
 //   lastConfigWrite: null,
 // }
 
-import fs from 'node:fs';
-import path from 'node:path';
+// NOTE: this module is intentionally storage-agnostic (no node:fs) so the same
+// class runs in Node (collector) and in a Cloudflare Worker (Pages Function).
+// Persistence is injected via the `persist` callback; Node uses
+// control-store-node.mjs (fs file), Workers use a KV namespace.
 
 const DEFAULT_STATE = {
   ownerId: 6940999328,
@@ -45,32 +47,31 @@ const DEFAULT_STATE = {
 };
 
 export class ControlState {
-  constructor({ file, maxLogs = 5000 } = {}) {
-    this.file = file;
+  constructor({ initial, maxLogs = 5000, persist = null } = {}) {
     this.maxLogs = maxLogs;
-    this.state = structuredClone(DEFAULT_STATE);
-    this._load();
+    this._persist = typeof persist === 'function' ? persist : null;
+    const base = structuredClone(DEFAULT_STATE);
+    this.state = initial
+      ? { ...base, ...initial, settings: { ...base.settings, ...(initial.settings || {}) } }
+      : base;
   }
 
-  _load() {
-    try {
-      if (this.file && fs.existsSync(this.file)) {
-        const raw = fs.readFileSync(this.file, 'utf8');
-        const parsed = JSON.parse(raw);
-        this.state = { ...structuredClone(DEFAULT_STATE), ...parsed };
-        if (this.state.settings) this.state.settings = { ...DEFAULT_STATE.settings, ...this.state.settings };
-      }
-    } catch (e) {
-      console.error('[control-state] load failed:', String(e?.message || e).slice(0, 150));
-    }
+  // Build from a plain object (e.g. loaded from a file or KV).
+  static fromObject(obj, opts = {}) {
+    return new ControlState({ initial: obj || null, ...opts });
   }
 
   save() {
+    if (!this._persist) return;
     try {
-      if (this.file) fs.writeFileSync(this.file, JSON.stringify(this.state, null, 2));
-    } catch (e) {
-      console.error('[control-state] save failed:', String(e?.message || e).slice(0, 150));
-    }
+      const r = this._persist(this.state);
+      if (r && typeof r.then === 'function') r.catch(() => {});
+    } catch { /* best-effort */ }
+  }
+
+  // Await persistence (used by Workers after handling a mutating request).
+  async flush() {
+    if (this._persist) await this._persist(this.state);
   }
 
   // ---- identity ----
@@ -95,12 +96,19 @@ export class ControlState {
 
   sanitize() {
     // never leak API keys to panel clients where they're not needed
-    const providers = this.state.providers.map(p => ({
-      ...p,
-      keys: (p.keys || []).map(k => ({ ...k, value: k.value ? `sk-…${k.value.slice(-4)}` : '' })),
-    }));
+    const providers = this.state.providers.map(p => this.maskProvider(p));
     return { ...this.state, providers };
   }
+
+  // Masked copy of a provider (keys -> sk-…last4). Used for ALL client-facing
+  // responses (panel + bot commands). Only /api/runtime-config (secret-authed)
+  // returns real key values.
+  maskProvider(p) {
+    return { ...p, keys: (p.keys || []).map(k => ({ ...k, value: k.value ? `sk-…${k.value.slice(-4)}` : '' })) };
+  }
+
+  // Masked provider list for panel/bot list endpoints.
+  listProvidersSafe() { return this.state.providers.map(p => this.maskProvider(p)); }
 
   // ---- providers ----
   listProviders() { return this.state.providers; }

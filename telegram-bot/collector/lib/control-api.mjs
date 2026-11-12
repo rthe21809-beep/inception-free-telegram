@@ -294,12 +294,12 @@ export function createControlApi({ state, botDir, run, defaultCfgPath, cfgPath, 
         const b = await jsonBody(req);
         const op = p.slice('/api/bot/'.length);
         switch (op) {
-          case 'providers': return json(res, 200, { providers: state.listProviders() });
+          case 'providers': return json(res, 200, { providers: state.listProvidersSafe() });
           case 'providers/add': return json(res, 200, { provider: state.addProvider(b) });
           case 'providers/remove': return json(res, 200, { provider: state.removeProvider(b.id) });
           case 'providers/toggle': return json(res, 200, { provider: state.toggleProvider(b.id, b.enabled) });
           case 'keys/add': return json(res, 200, { key: state.addKey(b.id, b.key) });
-          case 'keys/remove': return json(res, 200, { provider: state.removeKey(b.id, b.keyId) });
+          case 'keys/remove': { const p = state.removeKey(b.id, b.keyId); return json(res, 200, { provider: p ? state.maskProvider(p) : null }); }
           case 'models': return json(res, 200, { models: state.listModels(), activeModelId: state.state.settings.defaultModelId });
           case 'models/add': return json(res, 200, { model: state.addModel(b) });
           case 'models/remove': return json(res, 200, { model: state.removeModel(b.id) });
@@ -369,7 +369,7 @@ export function createControlApi({ state, botDir, run, defaultCfgPath, cfgPath, 
 
         // ---- providers ----
         if (p === '/api/providers' && method === 'GET') {
-          return json(res, 200, { providers: state.listProviders() });
+          return json(res, 200, { providers: state.listProvidersSafe() });
         }
         if (p === '/api/providers/add' && method === 'POST') {
           const b = await jsonBody(req);
@@ -399,7 +399,7 @@ export function createControlApi({ state, botDir, run, defaultCfgPath, cfgPath, 
           const b = await jsonBody(req);
           const provider = state.removeKey(b.id, b.keyId);
           await regenerateAndPush('key removed');
-          return json(res, 200, { provider });
+          return json(res, 200, { provider: provider ? state.maskProvider(provider) : null });
         }
 
         // ---- models ----
