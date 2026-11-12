@@ -96,10 +96,19 @@ export BOT_TOKEN BOT_REPORT_SECRET
 echo "==> 4/4 Deploying via Cloudflare REST API"
 echo "   BOT_REPORT_SECRET = $BOT_REPORT_SECRET"
 echo
-set -o pipefail
-node "$HERE/cf-deploy.mjs" | tee /tmp/cf-deploy.log
-set +o pipefail
-PORTAL=$(grep -oE 'https://[a-z0-9-]+\.pages\.dev' /tmp/cf-deploy.log | tail -1)
+# Termux has no /tmp, so mktemp (which honours $TMPDIR -> $PREFIX/tmp) is used.
+# tee must not abort the run: the deploy is already live by this point, and
+# dying here would skip the host-secret write.
+LOG=$(mktemp "${TMPDIR:-$HOME}/cf-deploy.XXXXXX") || LOG=""
+if [ -n "$LOG" ]; then
+  node "$HERE/cf-deploy.mjs" 2>&1 | tee "$LOG"
+  DEPLOY_RC=${PIPESTATUS[0]}
+else
+  node "$HERE/cf-deploy.mjs"
+  DEPLOY_RC=$?
+fi
+PORTAL=$(grep -oE 'https://[a-z0-9-]+\.pages\.dev' "$LOG" 2>/dev/null | grep -v '//[0-9a-f]\{8\}\.' | tail -1)
+[ -n "$LOG" ] && rm -f "$LOG"
 
 echo
 if [ -z "$PORTAL" ]; then

@@ -122,14 +122,35 @@ function bytes(s, isB64) {
   return out;
 }
 
+// Hardening for the HTML/CSS/JS we serve. Note there is deliberately NO
+// X-Frame-Options here: a Telegram Mini App runs inside an iframe on Telegram
+// Web, so DENY/none would make the panel refuse to open on desktop. Framing is
+// restricted to Telegram instead, which is stricter than allowing anyone.
+const TG_FRAME = "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org";
+const STATIC_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+  'strict-transport-security': 'max-age=31536000; includeSubDomains',
+  'permissions-policy': 'geolocation=(), microphone=(), camera=(), payment=()',
+  'cross-origin-opener-policy': 'same-origin',
+};
+
 function serveStatic(url, request) {
   let key = url.pathname;
   const hit = ASSETS[key] || ASSETS[key + '/index.html'] || ASSETS['/index.html'];
   if (!hit) return new Response('Not found', { status: 404 });
   const body = bytes(hit.b, hit.e);
-  const headers = { 'content-type': hit.t };
+  const headers = { ...STATIC_HEADERS, 'content-type': hit.t };
   const immutable = key.startsWith('/assets/');
   headers['cache-control'] = immutable ? 'public, max-age=31536000, immutable' : 'no-cache';
+  // startsWith, not a regex: this source is emitted through a template
+  // literal, where a backslash in /\/html/ is consumed and breaks the regex.
+  if (String(hit.t || '').startsWith('text/html')) {
+    headers['content-security-policy'] =
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+      "img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; " +
+      "base-uri 'none'; form-action 'none'; " + TG_FRAME;
+  }
   return new Response(request.method === 'HEAD' ? null : body, { status: 200, headers });
 }
 

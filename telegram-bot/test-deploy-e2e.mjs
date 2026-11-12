@@ -110,5 +110,26 @@ ok('worker bundle has a metadata part', !!(wi && wi.hasMetadataPart), wi && JSON
 ok('_worker.js excluded from asset manifest', !!man && !Object.keys(man).some((k) => k.endsWith('_worker.js')),
   man && Object.keys(man).join(','));
 
+// Header hardening of the generated wrapper. These are asserted against the
+// real generated source, because a header that is merely intended is a header
+// that is absent in production.
+const wr = readFileSync(join(process.cwd(), 'admin-panel', 'dist', '_worker.js'), 'utf8');
+// esbuild re-prints object literals, so match either quote style.
+ok('static responses send nosniff', /["']x-content-type-options["']\s*:\s*["']nosniff["']/.test(wr));
+ok('static responses send no-referrer', /["']referrer-policy["']\s*:\s*["']no-referrer["']/.test(wr));
+ok('static responses send HSTS', /["']?strict-transport-security["']?\s*:\s*["']max-age=31536000/.test(wr));
+ok('html gets a CSP', /content-security-policy["']?\]?\s*=/.test(wr) && /default-src 'self'/.test(wr));
+ok('CSP forbids object/base/form injection', /object-src 'none'/.test(wr) && /base-uri 'none'/.test(wr) && /form-action 'none'/.test(wr));
+// A Telegram Mini App is framed on Telegram Web, so blanket DENY breaks it.
+// This is the one header that must NOT be applied to html.
+ok('html CSP allows telegram framing', /frame-ancestors 'self' https:\/\/web\.telegram\.org/.test(wr));
+// The API's SEC_HEADERS legitimately sends DENY on JSON. Only the static
+// handler must avoid it, or the Mini App cannot render inside Telegram.
+const staticBlock = (wr.match(/var STATIC_HEADERS = \{[\s\S]*?\};/) || [''])[0];
+ok('static header block found', staticBlock.length > 0);
+ok('no blanket X-Frame-Options on static',
+  !/x-frame-options/i.test(staticBlock), 'framing would block the Mini App');
+ok('assets stay cacheable immutable', /max-age=31536000, immutable/.test(wr));
+
 console.log(fail ? `\n${fail} FAILED` : '\nall deploy e2e checks passed');
 process.exit(fail ? 1 : 0);
