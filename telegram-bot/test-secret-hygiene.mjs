@@ -65,7 +65,9 @@ try {
 if (tracked.trim()) {
   let diff = '';
   try {
-    diff = execFileSync('git', ['show', `:tgcloud/lib/host-secret.js`], { cwd: root, stdio: 'pipe' }).toString();
+    // ':./' is required: a bare ':path' is resolved from the repo ROOT, not
+    // from this subdirectory, and would silently read nothing.
+    diff = execFileSync('git', ['show', `:./tgcloud/lib/host-secret.js`], { cwd: root, stdio: 'pipe' }).toString();
   } catch { diff = ''; }
   ok('committed host-secret is still the empty placeholder',
     /reportUrl:\s*''/.test(diff) && /reportSecret:\s*''/.test(diff),
